@@ -1,0 +1,234 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Light (default) ──────────────────────────────────────── */
+:root {
+    --background: #ffffff;
+    --foreground: #111827;
+    --accent: #b45309;
+    --accent-light: #f59e0b;
+    --card: #f8fafc;
+    --border: #e2e8f0;
+    --muted: #94a3b8;
+    --success: #16a34a;
+    --success-bg: rgba(22, 163, 74, 0.08);
+    --error: #dc2626;
+    --error-bg: rgba(220, 38, 38, 0.08);
+}
+
+/* ── Dark mode ────────────────────────────────────────────── */
+html.dark {
+    --background: #0a0a0f;
+    --foreground: #e2e8f0;
+    --accent: #d97706;
+    --accent-light: #fbbf24;
+    --card: #13131a;
+    --border: #1e1e2e;
+    --muted: #64748b;
+    --success: #4ade80;
+    --success-bg: rgba(74, 222, 128, 0.08);
+    --error: #fca5a5;
+    --error-bg: rgba(252, 165, 165, 0.08);
+}
+
+body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-space), 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    transition: background-color 0.25s, color 0.25s;
+}
+
+h1,
+h2,
+h3,
+h4 {
+    font-family: var(--font-space), sans-serif;
+    letter-spacing: -0.02em;
+}
+
+/* ── Card with hover glow ─────────────────────────────────── */
+.cc-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.cc-card:hover {
+    box-shadow: 0 0 24px rgba(180, 83, 9, 0.18);
+    border-color: rgba(180, 83, 9, 0.4);
+}
+
+/* ── Inputs ───────────────────────────────────────────────── */
+.cc-input {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 9px 12px;
+    font-size: 0.875rem;
+    color: var(--foreground);
+    width: 100%;
+    font-family: inherit;
+    transition: border-color 0.15s, box-shadow 0.15s;
+    resize: none;
+}
+
+.cc-input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(180, 83, 9, 0.15);
+}
+
+.cc-input::placeholder {
+    color: var(--muted);
+    opacity: 0.7;
+}
+
+/* ── Hero scan-line texture ───────────────────────────────── */
+.cc-scanlines {
+    position: relative;
+    overflow: hidden;
+}
+
+.cc-scanlines::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(0deg,
+            transparent,
+            transparent 2px,
+            rgba(255, 255, 255, 0.018) 2px,
+            rgba(255, 255, 255, 0.018) 4px);
+    pointer-events: none;
+    z-index: 1;
+}
+
+html.light .cc-scanlines::after {
+    background: repeating-linear-gradient(0deg,
+            transparent,
+            transparent 2px,
+            rgba(0, 0, 0, 0.025) 2px,
+            rgba(0, 0, 0, 0.025) 4px);
+}
+
+/* ── Animated dots ────────────────────────────────────────── */
+@keyframes cc-blink {
+
+    0%,
+    100% {
+        opacity: 0.2;
+    }
+
+    50% {
+        opacity: 1;
+    }
+}
+
+.cc-dot {
+    animation: cc-blink 1.2s ease-in-out infinite;
+}
+
+/* ── Monospace addresses ──────────────────────────────────── */
+.addr {
+    font-family: var(--font-mono), 'Courier New', 'Menlo', monospace;
+    font-size: 0.82em;
+    letter-spacing: 0.02em;
+}
+
+/* ── Hero section ─────────────────────────────────────────── */
+.cc-hero {
+    position: relative;
+    padding: 64px 24px;
+    text-align: center;
+    border-bottom: 1px solid var(--border);
+    background: #1a2035;
+    overflow: hidden;
+}
+
+.cc-hero-bg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+
+/* Scan-line overlay on hero */
+.cc-hero::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(0deg,
+            transparent,
+            transparent 3px,
+            rgba(255, 255, 255, 0.012) 3px,
+            rgba(255, 255, 255, 0.012) 4px);
+    pointer-events: none;
+    z-index: 1;
+}
+
+.cc-hero-content {
+    position: relative;
+    z-index: 2;
+}
+
+.cc-hero-eyebrow {
+    font-family: var(--font-rajdhani), sans-serif;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: #94a3b8;
+    margin-bottom: 16px;
+}
+
+.cc-hero-heading {
+    font-family: var(--font-orbitron), sans-serif;
+    font-size: clamp(1.6rem, 4vw, 2.8rem);
+    font-variant: all-small-caps;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: #f1f5f9;
+    line-height: 1.2;
+    margin-bottom: 16px;
+    text-shadow: 0 2px 20px rgba(0, 0, 0, 0.5);
+}
+
+.cc-hero-accent {
+    color: #cbd5e1;
+    text-shadow: 0 0 24px rgba(255, 255, 255, 0.25);
+}
+
+.cc-hero-sub {
+    font-size: 0.85rem;
+    color: #94a3b8;
+    max-width: 480px;
+    margin: 0 auto;
+    line-height: 1.7;
+}
+
+/* ── Section / step labels (Rajdhani) ────────────────────── */
+.cc-label {
+    font-family: var(--font-rajdhani), sans-serif;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+
+.cc-step-num {
+    font-family: var(--font-rajdhani), sans-serif;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+}
+
+/* ── Tab button text (Rajdhani) ──────────────────────────── */
+.cc-tab {
+    font-family: var(--font-rajdhani), sans-serif;
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}

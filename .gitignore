@@ -1,0 +1,22 @@
+# Dependencies
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# Environment
+frontend/.env.local
+frontend/.env*.local
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Misc
+*.log
