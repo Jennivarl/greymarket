@@ -94,14 +94,15 @@ class GreyMarket(gl.Contract):
         )
 
     @gl.public.write
-    def place_bet(self, market_id_int: int, position: str) -> None:
+    def place_bet(self, market_id_int: int, position: str, amount: int) -> None:
         """
         Place a YES or NO bet on an open market.
-        Costs 100 GUSDC (fake demo token). New wallets start with 1000 GUSDC.
+        Minimum bet is 100 GUSDC. New wallets start with 1000 GUSDC.
 
         Args:
             market_id_int: The numeric ID of the market
             position:      "YES" or "NO"
+            amount:        Amount of GUSDC to bet (minimum 100)
         """
         mid = u256(market_id_int)
         if mid not in self.markets:
@@ -112,21 +113,23 @@ class GreyMarket(gl.Contract):
             raise gl.UserError("Market already resolved — betting closed")
         if position not in ("YES", "NO"):
             raise gl.UserError("Position must be YES or NO")
+        if amount < 100:
+            raise gl.UserError("Minimum bet is 100 GUSDC")
 
         bettor = gl.message.sender_address
         self._init_balance(bettor)
 
-        if int(self.balances[bettor]) < 100:
-            raise gl.UserError("Insufficient balance — you need 100 GUSDC to bet")
+        if int(self.balances[bettor]) < amount:
+            raise gl.UserError(f"Insufficient balance — you need {amount} GUSDC to bet")
 
         # Lock the bet amount
-        self.balances[bettor] = u256(int(self.balances[bettor]) - 100)
+        self.balances[bettor] = u256(int(self.balances[bettor]) - amount)
 
         bet = Bet(
             market_id=mid,
             bettor=bettor,
             position=position,
-            amount=u256(100),
+            amount=u256(amount),
         )
 
         if bettor not in self.user_bets:
@@ -137,11 +140,12 @@ class GreyMarket(gl.Contract):
             self.market_bets[mid] = DynArray[Bet]()
         self.market_bets[mid].append(bet)
 
+        # total_yes / total_no track GUSDC volume (not bet count)
         if position == "YES":
-            market.total_yes = u256(int(market.total_yes) + 1)
+            market.total_yes = u256(int(market.total_yes) + amount)
         else:
-            market.total_no = u256(int(market.total_no) + 1)
-        market.pot = u256(int(market.pot) + 100)
+            market.total_no = u256(int(market.total_no) + amount)
+        market.pot = u256(int(market.pot) + amount)
         self.markets[mid] = market
 
     @gl.public.write
@@ -238,17 +242,18 @@ Return ONLY valid JSON with these exact keys:
         reasoning = str(result.get("reasoning", "")).strip()[:500]
         confidence = max(50, min(100, int(result.get("confidence", 70))))
 
-        # Distribute pot to winners proportionally
+        # Distribute pot to winners proportionally (by amount wagered)
         if mid in self.market_bets and int(market.pot) > 0:
-            winning_count = int(market.total_yes) if verdict == "YES" else int(market.total_no)
-            if winning_count > 0:
-                payout_each = int(market.pot) // winning_count
+            winning_volume = int(market.total_yes) if verdict == "YES" else int(market.total_no)
+            if winning_volume > 0:
+                pot = int(market.pot)
                 for bet in self.market_bets[mid]:
                     if bet.position == verdict:
                         addr = bet.bettor
+                        payout = pot * int(bet.amount) // winning_volume
                         if addr not in self.balances:
                             self.balances[addr] = u256(0)
-                        self.balances[addr] = u256(int(self.balances[addr]) + payout_each)
+                        self.balances[addr] = u256(int(self.balances[addr]) + payout)
 
         market.resolved = True
         market.outcome = verdict

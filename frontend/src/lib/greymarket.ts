@@ -96,7 +96,8 @@ export async function createMarket(
 export async function placeBet(
     senderAddress: string,
     marketId: number,
-    position: 'YES' | 'NO'
+    position: 'YES' | 'NO',
+    amount: number
 ): Promise<string> {
     const account = { address: toAddress(senderAddress), type: 'json-rpc' as const }
     try {
@@ -104,7 +105,7 @@ export async function placeBet(
         const txId = await (client as any).writeContract({
             address: CONTRACT_ADDRESS,
             functionName: 'place_bet',
-            args: [marketId, position],
+            args: [marketId, position, amount],
             account,
             value: 0n,
         })

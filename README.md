@@ -37,12 +37,12 @@ GenLayer's AI validators can **browse the web, reason over evidence, and reach B
 ## Contract
 
 Deployed on **GenLayer Bradbury Testnet**:
-`0x2D89Cfb57C3b6E4Ceb52cb9Fc034d0C7b906A452`
+`0x41fca6c3b500AA903D4714f83C213B6B4A243370`
 
 | Method | Type | Description |
 |--------|------|-------------|
 | `create_market(question, context, deadline)` | write | Create a new prediction market |
-| `place_bet(market_id, position)` | write | Bet YES or NO on a market |
+| `place_bet(market_id, position, amount)` | write | Bet YES or NO on a market (min 100 GUSDC) |
 | `resolve_market(market_id)` | write | Trigger AI resolution (post-deadline) |
 | `get_all_markets()` | read | Return all markets with state |
 | `get_market(market_id)` | read | Get a single market |

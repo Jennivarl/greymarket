@@ -20,6 +20,8 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
     const [resolving, setResolving] = useState(false)
     const [error, setError] = useState('')
     const [txHash, setTxHash] = useState('')
+    const [betAmount, setBetAmount] = useState(100)
+    const [pendingRefresh, setPendingRefresh] = useState(false)
 
     const now = Math.floor(Date.now() / 1000)
     const isExpired = now > market.deadline
@@ -29,13 +31,16 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
 
     async function handleBet(position: 'YES' | 'NO') {
         if (!address) return
+        if (betAmount < 100) { setError('Minimum bet is 100 GUSDC'); return }
+        if (betAmount > userBalance) { setError(`Insufficient balance — you only have ${userBalance} GUSDC`); return }
         setBetting(true)
         setError('')
         setTxHash('')
         try {
-            const hash = await placeBet(address, market.id, position)
+            const hash = await placeBet(address, market.id, position, betAmount)
             setTxHash(hash)
-            onUpdate()
+            setPendingRefresh(true)
+            await onUpdate()
         } catch (err) {
             setError(String(err))
         } finally {
@@ -97,7 +102,7 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
             {/* Stats row */}
             <div className="grid grid-cols-3 gap-3">
                 {[
-                    { label: 'Total Bets', value: String(total) },
+                    { label: 'Total Volume', value: `${total} GUSDC` },
                     { label: 'Pot', value: `${market.pot} GUSDC` },
                     { label: market.resolved ? 'Confidence' : 'Your Balance', value: market.resolved ? `${market.confidence}%` : `${userBalance} GUSDC` },
                 ].map(s => (
@@ -116,10 +121,10 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
                 </div>
                 <div className="flex justify-between">
                     <span className="text-sm font-semibold" style={{ color: 'var(--success)' }}>
-                        YES — {yesPct}% · {market.total_yes} bets
+                        YES — {yesPct}% · {market.total_yes} GUSDC
                     </span>
                     <span className="text-sm font-semibold" style={{ color: 'var(--error)' }}>
-                        {market.total_no} bets · {noPct}% — NO
+                        {market.total_no} GUSDC · {noPct}% — NO
                     </span>
                 </div>
             </div>
@@ -172,8 +177,27 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
             ) : !market.resolved && !isExpired ? (
                 <div className="flex flex-col gap-3">
                     <p className="cc-label" style={{ color: 'var(--muted)' }}>
-                        Place your bet · 100 GUSDC · Balance: {userBalance} GUSDC
+                        Place your bet · Balance: {userBalance} GUSDC
                     </p>
+                    {/* Amount input */}
+                    <div className="flex items-center gap-2">
+                        <label className="cc-label whitespace-nowrap" style={{ color: 'var(--muted)' }}>Amount (GUSDC)</label>
+                        <input
+                            type="number"
+                            min={100}
+                            max={userBalance}
+                            step={100}
+                            value={betAmount}
+                            onChange={e => setBetAmount(Math.max(100, Math.min(userBalance, Number(e.target.value) || 100)))}
+                            disabled={betting}
+                            className="flex-1 rounded-lg px-3 py-2 text-sm font-semibold text-right border outline-none"
+                            style={{
+                                background: 'var(--card)',
+                                border: '1px solid var(--border)',
+                                color: 'var(--foreground)',
+                            }}
+                        />
+                    </div>
                     <div className="grid grid-cols-2 gap-3">
                         <button
                             onClick={() => handleBet('YES')}
@@ -181,7 +205,7 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
                             className="rounded-lg px-4 py-3 text-sm font-bold transition-all disabled:opacity-40 hover:opacity-90"
                             style={{ background: 'var(--success)', color: '#0a0a0f' }}
                         >
-                            {betting ? '…' : '▲ YES'}
+                            {betting ? '…' : `▲ YES · ${betAmount} GUSDC`}
                         </button>
                         <button
                             onClick={() => handleBet('NO')}
@@ -189,7 +213,7 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
                             className="rounded-lg px-4 py-3 text-sm font-bold transition-all disabled:opacity-40 hover:opacity-90"
                             style={{ background: 'var(--error)', color: '#0a0a0f' }}
                         >
-                            {betting ? '…' : '▼ NO'}
+                            {betting ? '…' : `▼ NO · ${betAmount} GUSDC`}
                         </button>
                     </div>
                 </div>
@@ -223,9 +247,38 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
                 </p>
             )}
             {txHash && !market.resolved && (
-                <p className="text-sm px-3 py-2 rounded-lg" style={{ background: 'var(--success-bg)', color: 'var(--success)' }}>
-                    Transaction submitted! Tx: <span className="addr">{txHash.slice(0, 22)}…</span>
-                </p>
+                <div
+                    className="flex flex-col gap-3 px-4 py-3 rounded-xl text-sm"
+                    style={{ background: 'rgba(180,83,9,0.08)', border: '1px solid rgba(180,83,9,0.25)', color: 'var(--foreground)' }}
+                >
+                    <div className="flex items-center gap-2">
+                        <span className="text-base">⏳</span>
+                        <span className="font-semibold" style={{ color: 'var(--accent-light)' }}>
+                            Bet submitted — waiting for validators
+                        </span>
+                    </div>
+                    <p style={{ color: 'var(--muted)', lineHeight: 1.6 }}>
+                        <strong style={{ color: 'var(--foreground)' }}>Why does this take so long?</strong><br />
+                        GenLayer runs multiple AI validators that must independently reach consensus before a transaction is confirmed on-chain. On the Bradbury testnet this typically takes <strong style={{ color: 'var(--foreground)' }}>1–5 minutes</strong>, but can take longer under load.
+                    </p>
+                    <p style={{ color: 'var(--muted)', lineHeight: 1.6 }}>
+                        Your MetaMask already signed and broadcast the transaction — <strong style={{ color: 'var(--foreground)' }}>your bet is queued</strong>. This page will not update automatically. Once you think enough time has passed, click the button below to pull the latest state from the chain.
+                    </p>
+                    {txHash !== 'pending' && (
+                        <p className="text-xs addr" style={{ color: 'var(--muted)' }}>
+                            Tx: {txHash.slice(0, 30)}…
+                        </p>
+                    )}
+                    {pendingRefresh && (
+                        <button
+                            onClick={async () => { setPendingRefresh(false); await onUpdate() }}
+                            className="self-start text-xs px-4 py-2 rounded-lg font-semibold transition-opacity hover:opacity-80"
+                            style={{ background: 'var(--accent)', color: '#fff' }}
+                        >
+                            ↻ Check if my bet landed
+                        </button>
+                    )}
+                </div>
             )}
         </div>
     )
