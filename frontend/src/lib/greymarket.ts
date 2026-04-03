@@ -8,8 +8,7 @@ function toAddress(s: string): GL_Address {
 }
 
 export const CONTRACT_ADDRESS: GL_Address = toAddress(
-    process.env.NEXT_PUBLIC_CONTRACT_ADDRESS ||
-    '0x0000000000000000000000000000000000000000'
+    (process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || '0x7f81b37E0cCADE1401fA80691153127BF8674DF9').trim()
 )
 
 // Single client: genlayer-js 0.23.1 uses gen_call for reads (always HTTP)
