@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { type Market, placeBet, resolveMarket } from '@/lib/greymarket'
 import { useWallet } from '@/hooks/useWallet'
 
@@ -21,7 +21,160 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
     const [error, setError] = useState('')
     const [txHash, setTxHash] = useState('')
     const [betAmount, setBetAmount] = useState(100)
-    const [pendingRefresh, setPendingRefresh] = useState(false)
+    const [txStatus, setTxStatus] = useState('')
+    const [refreshing, setRefreshing] = useState(false)
+    const pollingRef = useRef(false)
+
+    function dismissTx() {
+        pollingRef.current = false
+        setTxHash('')
+        setTxStatus('')
+    }
+
+    async function manualRefresh() {
+        setRefreshing(true)
+        await onUpdate()
+        setRefreshing(false)
+    }
+
+    // Auto-poll tx status after a bet is placed.
+    // Two phases:
+    //   Phase 1 (only when txHash starts with 'eth:'): The SDK timed out before
+    //     extracting the GenLayer txId, but it saved the Ethereum tx hash for us.
+    //     Poll eth_getTransactionReceipt directly via RPC (no SDK timeout), then
+    //     parse the NewTransaction event log to get the real GenLayer txId.
+    //   Phase 2: Poll the GenLayer consensus data contract for the txId status.
+    useEffect(() => {
+        if (!txHash) return
+
+        if (txHash === 'pending') {
+            setTxStatus('BROADCAST')
+            return
+        }
+
+        pollingRef.current = true
+
+            ; (async () => {
+                // ── Phase 1: Ethereum receipt → extract GenLayer txId ────────────
+                // Bradbury consensus main contract (emits NewTransaction event)
+                const BRADBURY_CONSENSUS = '0x0112Bf6e83497965A5fdD6Dad1E447a6E004271D'
+                const BRADBURY_RPC = 'https://rpc-bradbury.genlayer.com'
+
+                let genLayerTxId = txHash
+
+                if (txHash.startsWith('eth:')) {
+                    setTxStatus('MINING')
+                    const evmHash = txHash.slice(4)
+                    let found = false
+
+                    for (let i = 0; i < 120 && pollingRef.current; i++) {
+                        await new Promise(r => setTimeout(r, 5000))
+                        if (!pollingRef.current) return
+                        try {
+                            const res = await fetch(BRADBURY_RPC, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getTransactionReceipt', params: [evmHash] }),
+                            })
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                            const j: any = await res.json()
+                            const receipt = j?.result
+                            if (!receipt) continue // not mined yet
+
+                            if (receipt.status === '0x0') {
+                                setTxStatus('REJECTED')
+                                pollingRef.current = false
+                                return
+                            }
+                            // Find the NewTransaction log from the consensus contract
+                            // topics[1] is the indexed bytes32 txId (first indexed field)
+                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                            const log = receipt.logs?.find((l: any) =>
+                                l.address?.toLowerCase() === BRADBURY_CONSENSUS.toLowerCase() &&
+                                Array.isArray(l.topics) && l.topics.length >= 2
+                            )
+                            if (log?.topics?.[1]) {
+                                genLayerTxId = log.topics[1]  // real GenLayer txId
+                                found = true
+                                break
+                            }
+                            // Receipt mined but no NewTransaction event → submission was rejected by consensus contract
+                            setTxStatus('BROADCAST')
+                            pollingRef.current = false
+                            return
+                        } catch { /* keep polling */ }
+                    }
+
+                    if (!found) {
+                        if (pollingRef.current) { pollingRef.current = false; setTxStatus('TIMEOUT') }
+                        return
+                    }
+                }
+
+                // ── Phase 2: poll consensus MAIN contract events ─────────────────
+                // getTransactionData (consensus DATA contract) internally calls the
+                // ZKSync-OS VM which is unreliable on Bradbury.  Instead poll
+                // eth_getLogs on the consensus MAIN contract — pure Ethereum events,
+                // no VM involved.  txId is topics[1] (first indexed field).
+                setTxStatus('PENDING')
+                const BRADBURY_MAIN = '0x0112Bf6e83497965A5fdD6Dad1E447a6E004271D'
+                // keccak256 of terminal event signatures (precomputed)
+                const ACCEPTED_SIG     = '0xf250caa116f9eac0e4e82d403f131ce0a520b6c232dbcbe270b3729b0aaca09e'
+                const FINALIZED_SIG    = '0x24196ec40f90671b7144e716978686b4f3c7d6b00b23da3971ef2b52af27d87f'
+                const CANCELLED_SIG    = '0x0a94f6cf3e473cb72e765b24d1365bfcbef8d31a73215bb27e50df39757f578a'
+                const UNDETERMINED_SIG = '0xb9f69df2250e1788b862d0715b1dad98b2a50311c017ebb71f6cd83de656b06d'
+
+                // Pad txId to 32 bytes for topic matching
+                const txIdTopic = genLayerTxId.startsWith('0x')
+                    ? genLayerTxId
+                    : '0x' + genLayerTxId
+
+                for (let i = 0; i < 120 && pollingRef.current; i++) {
+                    await new Promise(r => setTimeout(r, 5000))
+                    if (!pollingRef.current) break
+                    try {
+                        const res = await fetch(BRADBURY_RPC, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                jsonrpc: '2.0', id: 1,
+                                method: 'eth_getLogs',
+                                params: [{
+                                    address: BRADBURY_MAIN,
+                                    topics: [
+                                        [ACCEPTED_SIG, FINALIZED_SIG, CANCELLED_SIG, UNDETERMINED_SIG],
+                                        txIdTopic
+                                    ],
+                                    fromBlock: 'earliest',
+                                    toBlock: 'latest'
+                                }]
+                            })
+                        })
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        const j: any = await res.json()
+                        const logs: Array<{ topics: string[] }> = j?.result ?? []
+                        if (logs.length > 0) {
+                            const sig = logs[0].topics[0]
+                            if (sig === ACCEPTED_SIG || sig === FINALIZED_SIG) {
+                                pollingRef.current = false
+                                setTxStatus('ACCEPTED')
+                                await onUpdate()
+                            } else {
+                                pollingRef.current = false
+                                setTxStatus('REJECTED')
+                            }
+                            break
+                        }
+                    } catch (e) {
+                        console.warn('[genlayer] eth_getLogs poll', i, e)
+                    }
+                }
+                if (pollingRef.current) { pollingRef.current = false; setTxStatus('TIMEOUT') }
+            })()
+
+        return () => { pollingRef.current = false }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [txHash])
 
     const now = Math.floor(Date.now() / 1000)
     const isExpired = now > market.deadline
@@ -36,11 +189,11 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
         setBetting(true)
         setError('')
         setTxHash('')
+        setTxStatus('')
+        pollingRef.current = false
         try {
             const hash = await placeBet(address, market.id, position, betAmount)
-            setTxHash(hash)
-            setPendingRefresh(true)
-            await onUpdate()
+            setTxHash(hash)  // triggers the polling useEffect
         } catch (err) {
             setError(String(err))
         } finally {
@@ -251,32 +404,96 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
                     className="flex flex-col gap-3 px-4 py-3 rounded-xl text-sm"
                     style={{ background: 'rgba(180,83,9,0.08)', border: '1px solid rgba(180,83,9,0.25)', color: 'var(--foreground)' }}
                 >
-                    <div className="flex items-center gap-2">
-                        <span className="text-base">⏳</span>
-                        <span className="font-semibold" style={{ color: 'var(--accent-light)' }}>
-                            Bet submitted — waiting for validators
-                        </span>
-                    </div>
-                    <p style={{ color: 'var(--muted)', lineHeight: 1.6 }}>
-                        <strong style={{ color: 'var(--foreground)' }}>Why does this take so long?</strong><br />
-                        GenLayer runs multiple AI validators that must independently reach consensus before a transaction is confirmed on-chain. On the Bradbury testnet this typically takes <strong style={{ color: 'var(--foreground)' }}>1–5 minutes</strong>, but can take longer under load.
-                    </p>
-                    <p style={{ color: 'var(--muted)', lineHeight: 1.6 }}>
-                        Your MetaMask already signed and broadcast the transaction — <strong style={{ color: 'var(--foreground)' }}>your bet is queued</strong>. This page will not update automatically. Once you think enough time has passed, click the button below to pull the latest state from the chain.
-                    </p>
-                    {txHash !== 'pending' && (
-                        <p className="text-xs addr" style={{ color: 'var(--muted)' }}>
-                            Tx: {txHash.slice(0, 30)}…
-                        </p>
-                    )}
-                    {pendingRefresh && (
-                        <button
-                            onClick={async () => { setPendingRefresh(false); await onUpdate() }}
-                            className="self-start text-xs px-4 py-2 rounded-lg font-semibold transition-opacity hover:opacity-80"
-                            style={{ background: 'var(--accent)', color: '#fff' }}
-                        >
-                            ↻ Check if my bet landed
-                        </button>
+                    {txStatus === 'ACCEPTED' || txStatus === 'FINALIZED' ? (
+                        <div className="flex items-center gap-2">
+                            <span style={{ color: 'var(--success)' }}>✔</span>
+                            <span className="font-semibold" style={{ color: 'var(--success)' }}>Bet confirmed! Market stats updated.</span>
+                        </div>
+                    ) : txStatus === 'REJECTED' || txStatus === 'CANCELLED' ? (
+                        <>
+                            <div className="flex items-center gap-2">
+                                <span style={{ color: 'var(--error)' }}>✘</span>
+                                <span className="font-semibold" style={{ color: 'var(--error)' }}>Bet rejected by validators. Your GUSDC was not deducted.</span>
+                            </div>
+                            <button onClick={dismissTx} className="self-start text-xs px-3 py-1.5 rounded-lg border" style={{ borderColor: 'var(--border)', color: 'var(--muted)' }}>Dismiss</button>
+                        </>
+                    ) : txStatus === 'BROADCAST' ? (
+                        <>
+                            <p className="font-semibold" style={{ color: 'var(--accent-light)' }}>⚠️ Transaction sent — ID not returned</p>
+                            <p style={{ color: 'var(--muted)', lineHeight: 1.6 }}>
+                                MetaMask signed and broadcast your transaction, but the GenLayer txId wasn’t returned (Bradbury consensus timeout on submission). Your bet <strong style={{ color: 'var(--foreground)' }}>may or may not</strong> have landed — click below to check the market.
+                            </p>
+                            <div className="flex gap-2">
+                                <button onClick={manualRefresh} disabled={refreshing} className="text-xs px-3 py-1.5 rounded-lg font-semibold disabled:opacity-50" style={{ background: 'var(--accent)', color: '#fff' }}>
+                                    {refreshing ? 'Checking…' : '↻ Check market'}
+                                </button>
+                                <button onClick={dismissTx} className="text-xs px-3 py-1.5 rounded-lg border" style={{ borderColor: 'var(--border)', color: 'var(--muted)' }}>Dismiss</button>
+                            </div>
+                        </>
+                    ) : txStatus === 'MINING' ? (
+                        <>
+                            <div className="flex items-center gap-2">
+                                <span className="inline-flex items-center gap-1">
+                                    <span className="cc-dot">●</span>
+                                    <span className="cc-dot" style={{ animationDelay: '0.3s' }}>●</span>
+                                    <span className="cc-dot" style={{ animationDelay: '0.6s' }}>●</span>
+                                </span>
+                                <span className="font-semibold" style={{ color: 'var(--accent-light)' }}>Waiting for block confirmation…</span>
+                            </div>
+                            <p style={{ color: 'var(--muted)', lineHeight: 1.6 }}>
+                                Signed by MetaMask — waiting for the Ethereum tx to be mined on Bradbury. Will hand off to GenLayer validators automatically once confirmed.
+                            </p>
+                        </>
+                    ) : txStatus === 'INFRA_ERROR' ? (
+                        <>
+                            <p className="font-semibold" style={{ color: 'var(--accent-light)' }}>⚠️ Validator infrastructure issue</p>
+                            <p style={{ color: 'var(--muted)', lineHeight: 1.6 }}>
+                                Bradbury&apos;s ZKSync-OS VM returned errors while processing your transaction.
+                                Market data has been refreshed — <strong style={{ color: 'var(--foreground)' }}>check if your bet appears in the totals above.</strong>
+                                If it does, your bet landed. If not, it likely did not go through.
+                            </p>
+                            <div className="flex gap-2">
+                                <button onClick={manualRefresh} disabled={refreshing} className="text-xs px-3 py-1.5 rounded-lg font-semibold disabled:opacity-50" style={{ background: 'var(--accent)', color: '#fff' }}>
+                                    {refreshing ? 'Checking…' : '↻ Refresh again'}
+                                </button>
+                                <button onClick={dismissTx} className="text-xs px-3 py-1.5 rounded-lg border" style={{ borderColor: 'var(--border)', color: 'var(--muted)' }}>Dismiss</button>
+                            </div>
+                        </>
+                    ) : txStatus === 'TIMEOUT' ? (
+                        <>
+                            <p className="font-semibold" style={{ color: 'var(--accent-light)' }}>⏰ Still unconfirmed after 10 min</p>
+                            <p style={{ color: 'var(--muted)', lineHeight: 1.6 }}>
+                                Bradbury validators are taking unusually long. Your bet is likely queued — check the market to see if it landed.
+                            </p>
+                            <div className="flex gap-2">
+                                <button onClick={manualRefresh} disabled={refreshing} className="text-xs px-3 py-1.5 rounded-lg font-semibold disabled:opacity-50" style={{ background: 'var(--accent)', color: '#fff' }}>
+                                    {refreshing ? 'Checking…' : '↻ Check market'}
+                                </button>
+                                <button onClick={dismissTx} className="text-xs px-3 py-1.5 rounded-lg border" style={{ borderColor: 'var(--border)', color: 'var(--muted)' }}>Dismiss</button>
+                            </div>
+                        </>
+                    ) : (
+                        <>
+                            <div className="flex items-center gap-2">
+                                <span className="inline-flex items-center gap-1">
+                                    <span className="cc-dot">●</span>
+                                    <span className="cc-dot" style={{ animationDelay: '0.3s' }}>●</span>
+                                    <span className="cc-dot" style={{ animationDelay: '0.6s' }}>●</span>
+                                </span>
+                                <span className="font-semibold" style={{ color: 'var(--accent-light)' }}>
+                                    Validators processing…
+                                    {txStatus && <span className="cc-label ml-2" style={{ color: 'var(--muted)' }}>{txStatus}</span>}
+                                </span>
+                            </div>
+                            <p style={{ color: 'var(--muted)', lineHeight: 1.6 }}>
+                                GenLayer validators must independently reach consensus before confirming.
+                                On Bradbury this takes <strong style={{ color: 'var(--foreground)' }}>1–5 minutes</strong>.
+                                This page updates automatically — no need to refresh.
+                            </p>
+                            {txHash !== 'pending' && (
+                                <p className="text-xs addr" style={{ color: 'var(--muted)' }}>Tx: {txHash.slice(0, 30)}…</p>
+                            )}
+                        </>
                     )}
                 </div>
             )}
