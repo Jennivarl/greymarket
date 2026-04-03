@@ -24,6 +24,25 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
     const [txStatus, setTxStatus] = useState('')
     const [refreshing, setRefreshing] = useState(false)
     const pollingRef = useRef(false)
+    const betPositionRef = useRef<'YES' | 'NO'>('YES')
+    const betAmountRef = useRef(100)
+
+    // Optimistic display values — updated immediately on ACCEPTED so the
+    // user sees changes without waiting 1-3 min for gen_call to reflect
+    // the new contract state.
+    const [displayYes, setDisplayYes] = useState(market.total_yes)
+    const [displayNo, setDisplayNo] = useState(market.total_no)
+    const [displayPot, setDisplayPot] = useState(market.pot)
+    const [displayBalance, setDisplayBalance] = useState(userBalance)
+
+    // Sync optimistic state back to chain truth when the market prop updates
+    useEffect(() => {
+        setDisplayYes(market.total_yes)
+        setDisplayNo(market.total_no)
+        setDisplayPot(market.pot)
+    }, [market.total_yes, market.total_no, market.pot])
+
+    useEffect(() => { setDisplayBalance(userBalance) }, [userBalance])
 
     function dismissTx() {
         pollingRef.current = false
@@ -136,6 +155,13 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
                         if (statusName === 'FINALIZED' || statusName === 'ACCEPTED') {
                             pollingRef.current = false
                             setTxStatus('ACCEPTED')
+                            // Optimistically update display before the slow gen_call refresh
+                            const pos = betPositionRef.current
+                            const amt = betAmountRef.current
+                            setDisplayYes(prev => pos === 'YES' ? prev + amt : prev)
+                            setDisplayNo(prev => pos === 'NO' ? prev + amt : prev)
+                            setDisplayPot(prev => prev + amt)
+                            setDisplayBalance(prev => prev - amt)
                             await onUpdate()
                             break
                         } else if (
@@ -163,14 +189,16 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
 
     const now = Math.floor(Date.now() / 1000)
     const isExpired = now > market.deadline
-    const total = market.total_yes + market.total_no
-    const yesPct = total > 0 ? Math.round((market.total_yes / total) * 100) : 50
+    const total = displayYes + displayNo
+    const yesPct = total > 0 ? Math.round((displayYes / total) * 100) : 50
     const noPct = 100 - yesPct
 
     async function handleBet(position: 'YES' | 'NO') {
         if (!address) return
         if (betAmount < 100) { setError('Minimum bet is 100 GUSDC'); return }
-        if (betAmount > userBalance) { setError(`Insufficient balance — you only have ${userBalance} GUSDC`); return }
+        if (betAmount > displayBalance) { setError(`Insufficient balance — you only have ${displayBalance} GUSDC`); return }
+        betPositionRef.current = position
+        betAmountRef.current = betAmount
         setBetting(true)
         setError('')
         setTxHash('')
@@ -241,8 +269,8 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
             <div className="grid grid-cols-3 gap-3">
                 {[
                     { label: 'Total Volume', value: `${total} GUSDC` },
-                    { label: 'Pot', value: `${market.pot} GUSDC` },
-                    { label: market.resolved ? 'Confidence' : 'Your Balance', value: market.resolved ? `${market.confidence}%` : `${userBalance} GUSDC` },
+                    { label: 'Pot', value: `${displayPot} GUSDC` },
+                    { label: market.resolved ? 'Confidence' : 'Your Balance', value: market.resolved ? `${market.confidence}%` : `${displayBalance} GUSDC` },
                 ].map(s => (
                     <div key={s.label} className="cc-card p-3 flex flex-col gap-0.5">
                         <span className="cc-label" style={{ color: 'var(--muted)' }}>{s.label}</span>
@@ -259,10 +287,10 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
                 </div>
                 <div className="flex justify-between">
                     <span className="text-sm font-semibold" style={{ color: 'var(--success)' }}>
-                        YES — {yesPct}% · {market.total_yes} GUSDC
+                        YES — {yesPct}% · {displayYes} GUSDC
                     </span>
                     <span className="text-sm font-semibold" style={{ color: 'var(--error)' }}>
-                        {market.total_no} GUSDC · {noPct}% — NO
+                        {displayNo} GUSDC · {noPct}% — NO
                     </span>
                 </div>
             </div>
@@ -315,7 +343,7 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
             ) : !market.resolved && !isExpired ? (
                 <div className="flex flex-col gap-3">
                     <p className="cc-label" style={{ color: 'var(--muted)' }}>
-                        Place your bet · Balance: {userBalance} GUSDC
+                        Place your bet · Balance: {displayBalance} GUSDC
                     </p>
                     {/* Amount input */}
                     <div className="flex items-center gap-2">
@@ -323,7 +351,7 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
                         <input
                             type="number"
                             min={100}
-                            max={userBalance}
+                            max={displayBalance}
                             step={100}
                             value={betAmount}
                             onChange={e => setBetAmount(Math.max(100, Math.min(userBalance, Number(e.target.value) || 100)))}
