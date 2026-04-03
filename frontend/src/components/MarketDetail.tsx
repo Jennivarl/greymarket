@@ -111,17 +111,10 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
                     }
                 }
 
-                // ── Phase 2: poll getTransactionStatus(bytes32) view fn on consensus MAIN ──
-                // eth_call to getTransactionStatus is reliable on Studionet (system contract).
-                // Status codes: 5=ACCEPTED, 7=FINALIZED, 6=UNDETERMINED, 8=CANCELED,
-                //   12=VALIDATORS_TIMEOUT, 13=LEADER_TIMEOUT, 1=PENDING, 2-4=in-progress
+                // ── Phase 2: poll eth_getTransactionByHash for GenLayer status ──────
+                // Studionet returns GenLayer-specific fields (status as string name) in
+                // eth_getTransactionByHash. No need for broken gen_ RPCs or ABI calls.
                 setTxStatus('PENDING')
-                const STUDIO_MAIN = '0xb7278A61aa25c888815aFC32Ad3cC52fF24fE575'
-                // selector = keccak256('getTransactionStatus(bytes32)')[:4] = 0x94407465
-                const GET_STATUS_SELECTOR = '0x94407465'
-                const txIdHex = genLayerTxId.startsWith('0x') ? genLayerTxId.slice(2) : genLayerTxId
-                const txIdPadded = txIdHex.padStart(64, '0')
-                const callData = GET_STATUS_SELECTOR + txIdPadded
 
                 for (let i = 0; i < 120 && pollingRef.current; i++) {
                     await new Promise(r => setTimeout(r, 5000))
@@ -132,39 +125,33 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
                                 jsonrpc: '2.0', id: 1,
-                                method: 'eth_call',
-                                params: [{ to: STUDIO_MAIN, data: callData }, 'latest']
+                                method: 'eth_getTransactionByHash',
+                                params: [genLayerTxId]
                             })
                         })
                         // eslint-disable-next-line @typescript-eslint/no-explicit-any
                         const j: any = await res.json()
-                        const statusCode = j?.result ? parseInt(j.result, 16) : -1
-                        const STATUS_NAMES: Record<number, string> = {
-                            0: 'UNINITIALIZED', 1: 'PENDING', 2: 'PROPOSING', 3: 'COMMITTING',
-                            4: 'REVEALING', 5: 'ACCEPTED', 6: 'UNDETERMINED', 7: 'FINALIZED',
-                            8: 'CANCELED', 9: 'APPEAL_REVEALING', 10: 'APPEAL_COMMITTING',
-                            11: 'READY_TO_FINALIZE', 12: 'VALIDATORS_TIMEOUT', 13: 'LEADER_TIMEOUT'
-                        }
-                        const statusName = STATUS_NAMES[statusCode] ?? `STATUS_${statusCode}`
-                        console.log('[genlayer] getTransactionStatus poll', i, 'status:', statusCode, statusName)
-                        if (statusCode === 5 || statusCode === 7) {
-                            // ACCEPTED or FINALIZED
+                        const statusName: string = j?.result?.status ?? ''
+                        console.log('[genlayer] eth_getTransactionByHash poll', i, 'status:', statusName)
+                        if (statusName === 'FINALIZED' || statusName === 'ACCEPTED') {
                             pollingRef.current = false
                             setTxStatus('ACCEPTED')
                             await onUpdate()
                             break
-                        } else if (statusCode === 6 || statusCode === 8 || statusCode === 12 || statusCode === 13) {
-                            // UNDETERMINED, CANCELED, VALIDATORS_TIMEOUT, LEADER_TIMEOUT
+                        } else if (
+                            statusName === 'UNDETERMINED' || statusName === 'CANCELED' ||
+                            statusName === 'VALIDATORS_TIMEOUT' || statusName === 'LEADER_TIMEOUT'
+                        ) {
                             pollingRef.current = false
                             setTxStatus('REJECTED')
                             break
-                        } else if (statusCode >= 1) {
-                            // Live progress: show current named status while polling
+                        } else if (statusName) {
+                            // Live progress: PENDING → PROPOSING → COMMITTING → REVEALING
                             setTxStatus(statusName)
                         }
-                        // else 0=UNINITIALIZED → keep polling silently
+                        // null/empty = not yet indexed, keep polling
                     } catch (e) {
-                        console.warn('[genlayer] getTransactionStatus poll', i, e)
+                        console.warn('[genlayer] eth_getTransactionByHash poll', i, e)
                     }
                 }
                 if (pollingRef.current) { pollingRef.current = false; setTxStatus('TIMEOUT') }
