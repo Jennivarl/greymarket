@@ -139,7 +139,14 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
                         // eslint-disable-next-line @typescript-eslint/no-explicit-any
                         const j: any = await res.json()
                         const statusCode = j?.result ? parseInt(j.result, 16) : -1
-                        console.log('[genlayer] getTransactionStatus poll', i, 'status:', statusCode)
+                        const STATUS_NAMES: Record<number, string> = {
+                            0: 'UNINITIALIZED', 1: 'PENDING', 2: 'PROPOSING', 3: 'COMMITTING',
+                            4: 'REVEALING', 5: 'ACCEPTED', 6: 'UNDETERMINED', 7: 'FINALIZED',
+                            8: 'CANCELED', 9: 'APPEAL_REVEALING', 10: 'APPEAL_COMMITTING',
+                            11: 'READY_TO_FINALIZE', 12: 'VALIDATORS_TIMEOUT', 13: 'LEADER_TIMEOUT'
+                        }
+                        const statusName = STATUS_NAMES[statusCode] ?? `STATUS_${statusCode}`
+                        console.log('[genlayer] getTransactionStatus poll', i, 'status:', statusCode, statusName)
                         if (statusCode === 5 || statusCode === 7) {
                             // ACCEPTED or FINALIZED
                             pollingRef.current = false
@@ -151,8 +158,11 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
                             pollingRef.current = false
                             setTxStatus('REJECTED')
                             break
+                        } else if (statusCode >= 1) {
+                            // Live progress: show current named status while polling
+                            setTxStatus(statusName)
                         }
-                        // else 1=PENDING, 2=PROPOSING, 3=COMMITTING, 4=REVEALING, 9-11=appeal → keep polling
+                        // else 0=UNINITIALIZED → keep polling silently
                     } catch (e) {
                         console.warn('[genlayer] getTransactionStatus poll', i, e)
                     }
@@ -468,18 +478,39 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
                                     <span className="cc-dot" style={{ animationDelay: '0.3s' }}>●</span>
                                     <span className="cc-dot" style={{ animationDelay: '0.6s' }}>●</span>
                                 </span>
-                                <span className="font-semibold" style={{ color: 'var(--accent-light)' }}>
-                                    Validators processing…
-                                    {txStatus && <span className="cc-label ml-2" style={{ color: 'var(--muted)' }}>{txStatus}</span>}
-                                </span>
+                                <span className="font-semibold" style={{ color: 'var(--accent-light)' }}>Validators processing…</span>
                             </div>
-                            <p style={{ color: 'var(--muted)', lineHeight: 1.6 }}>
-                                GenLayer validators must independently reach consensus before confirming.
-                                On Studionet this usually takes <strong style={{ color: 'var(--foreground)' }}>under a minute</strong>.
-                                This page updates automatically — no need to refresh.
-                            </p>
+                            {/* Progress steps */}
+                            {(() => {
+                                const steps = ['PENDING', 'PROPOSING', 'COMMITTING', 'REVEALING', 'ACCEPTED']
+                                const cur = steps.indexOf(txStatus)
+                                return (
+                                    <div className="flex items-center gap-1 flex-wrap">
+                                        {steps.map((s, idx) => {
+                                            const done = cur > idx
+                                            const active = cur === idx
+                                            return (
+                                                <span key={s} className="flex items-center gap-1">
+                                                    <span
+                                                        className="cc-label px-2 py-0.5 rounded-full transition-all"
+                                                        style={{
+                                                            background: done ? 'rgba(74,222,128,0.15)' : active ? 'rgba(180,83,9,0.2)' : 'var(--card)',
+                                                            color: done ? 'var(--success)' : active ? 'var(--accent-light)' : 'var(--muted)',
+                                                            border: active ? '1px solid rgba(180,83,9,0.4)' : '1px solid transparent',
+                                                            fontWeight: active ? 700 : 400,
+                                                        }}
+                                                    >
+                                                        {done ? '✓ ' : active ? '● ' : ''}{s}
+                                                    </span>
+                                                    {idx < steps.length - 1 && <span style={{ color: 'var(--muted)', fontSize: 10 }}>›</span>}
+                                                </span>
+                                            )
+                                        })}
+                                    </div>
+                                )
+                            })()}
                             {txHash !== 'pending' && (
-                                <p className="text-xs addr" style={{ color: 'var(--muted)' }}>Tx: {txHash.slice(0, 30)}…</p>
+                                <p className="text-xs addr" style={{ color: 'var(--muted)' }}>Tx: {(txHash.startsWith('eth:') ? txHash.slice(4) : txHash).slice(0, 30)}…</p>
                             )}
                         </>
                     )}
