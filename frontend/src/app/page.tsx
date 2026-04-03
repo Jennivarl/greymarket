@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { getAllMarkets, getBalance, type Market } from '@/lib/greymarket'
+import { loadBets, type UserBet } from '@/lib/bets'
 import GreyMarketLogo from '@/components/GreyMarketLogo'
 import WalletButton from '@/components/WalletButton'
 import MarketCard from '@/components/MarketCard'
@@ -19,6 +20,14 @@ export default function Home() {
     const [dark, setDark] = useState(false)
     const { address } = useWallet()
     const [balance, setBalance] = useState(1000)
+    const [myBets, setMyBets] = useState<UserBet[]>([])
+
+    const refreshBets = useCallback(() => {
+        if (address) setMyBets(loadBets(address))
+        else setMyBets([])
+    }, [address])
+
+    useEffect(() => { refreshBets() }, [refreshBets])
 
     const load = useCallback((currentSelected?: Market | null) => {
         // Returns the promise so callers can await fresh data if needed.
@@ -204,6 +213,52 @@ export default function Home() {
                                     ))}
                                 </section>
                             )}
+
+                            {/* My Bets */}
+                            {address && myBets.length > 0 && (
+                                <section className="flex flex-col gap-3">
+                                    <h3 className="text-xs font-semibold uppercase tracking-widest" style={{ color: 'var(--muted)' }}>
+                                        My Bets
+                                    </h3>
+                                    {[...myBets].reverse().map((bet, i) => {
+                                        const mkt = markets.find(m => m.id === bet.marketId)
+                                        const isWon = mkt?.resolved && mkt.outcome === bet.position
+                                        const isLost = mkt?.resolved && mkt.outcome !== bet.position
+                                        return (
+                                            <button
+                                                key={i}
+                                                onClick={() => mkt && setSelected(mkt)}
+                                                className="cc-card p-3 flex items-center gap-3 text-left transition-opacity hover:opacity-80 w-full"
+                                                style={{ cursor: mkt ? 'pointer' : 'default' }}
+                                            >
+                                                <span
+                                                    className="shrink-0 text-xs font-bold px-2 py-0.5 rounded-full"
+                                                    style={{
+                                                        background: bet.position === 'YES' ? 'rgba(74,222,128,0.12)' : 'rgba(252,165,165,0.12)',
+                                                        color: bet.position === 'YES' ? 'var(--success)' : 'var(--error)',
+                                                    }}
+                                                >
+                                                    {bet.position}
+                                                </span>
+                                                <span className="flex-1 text-xs truncate" style={{ color: 'var(--foreground)' }}>
+                                                    {bet.question}
+                                                </span>
+                                                <span className="shrink-0 text-xs font-semibold addr" style={{ color: 'var(--muted)' }}>
+                                                    {bet.amount} G
+                                                </span>
+                                                <span
+                                                    className="shrink-0 text-xs font-bold"
+                                                    style={{
+                                                        color: isWon ? 'var(--success)' : isLost ? 'var(--error)' : 'var(--muted)',
+                                                    }}
+                                                >
+                                                    {isWon ? '✔ Won' : isLost ? '✘ Lost' : '● Open'}
+                                                </span>
+                                            </button>
+                                        )
+                                    })}
+                                </section>
+                            )}
                             {resolvedMarkets.length > 0 && (
                                 <section className="flex flex-col gap-3">
                                     <h3 className="text-xs font-semibold uppercase tracking-widest" style={{ color: 'var(--muted)' }}>
@@ -239,9 +294,11 @@ export default function Home() {
                         <MarketDetail
                             market={selected}
                             userBalance={balance}
+                            onBetSaved={refreshBets}
                             onUpdate={async () => {
                                 await load(selected)
                                 if (address) getBalance(address).then(setBalance)
+                                refreshBets()
                             }}
                         />
                     ) : (
