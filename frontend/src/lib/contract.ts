@@ -15,20 +15,20 @@ export const CONTRACT_ADDRESS: GL_Address = toAddress(
     '0x0000000000000000000000000000000000000000'
 )
 
-const bradbury = {
-    id: 4221,
-    name: 'GenLayer Bradbury Testnet',
-    rpcUrls: { default: { http: ['https://rpc-bradbury.genlayer.com'] } },
+const studionet = {
+    id: 61999,
+    name: 'GenLayer Studionet',
+    rpcUrls: { default: { http: ['https://studio.genlayer.com/api'] } },
     nativeCurrency: { name: 'GEN Token', symbol: 'GEN', decimals: 18 },
     blockExplorers: {
-        default: { name: 'GenLayer Explorer', url: 'https://explorer-bradbury.genlayer.com' },
+        default: { name: 'GenLayer Explorer', url: 'https://explorer-studio.genlayer.com' },
     },
     testnet: true,
 }
 
 export const client = createClient({
-    chain: bradbury,
-    endpoint: 'https://rpc-bradbury.genlayer.com',
+    chain: studionet,
+    endpoint: 'https://studio.genlayer.com/api',
 })
 
 export type AgentProfile = {

@@ -12,12 +12,12 @@ declare global {
     }
 }
 
-const BRADBURY = {
-    chainId: '0x107D', // 4221
-    chainName: 'GenLayer Bradbury Testnet',
+const STUDIONET = {
+    chainId: '0xF22F', // 61999
+    chainName: 'GenLayer Studionet',
     nativeCurrency: { name: 'GEN', symbol: 'GEN', decimals: 18 },
-    rpcUrls: ['https://rpc-bradbury.genlayer.com'],
-    blockExplorerUrls: ['https://explorer-bradbury.genlayer.com'],
+    rpcUrls: ['https://studio.genlayer.com/api'],
+    blockExplorerUrls: ['https://explorer-studio.genlayer.com'],
 }
 
 export function useWallet() {
@@ -37,18 +37,18 @@ export function useWallet() {
                 method: 'eth_requestAccounts',
             }) as string[]
 
-            // Switch to or add Bradbury network
+            // Switch to or add Studionet network
             try {
                 await window.ethereum.request({
                     method: 'wallet_switchEthereumChain',
-                    params: [{ chainId: BRADBURY.chainId }],
+                    params: [{ chainId: STUDIONET.chainId }],
                 })
             } catch (switchErr: unknown) {
                 const e = switchErr as { code?: number }
                 if (e.code === 4902) {
                     await window.ethereum.request({
                         method: 'wallet_addEthereumChain',
-                        params: [BRADBURY],
+                        params: [STUDIONET],
                     })
                 } else {
                     throw switchErr

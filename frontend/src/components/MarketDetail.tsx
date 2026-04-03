@@ -56,9 +56,9 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
 
             ; (async () => {
                 // ── Phase 1: Ethereum receipt → extract GenLayer txId ────────────
-                // Bradbury consensus main contract (emits NewTransaction event)
-                const BRADBURY_CONSENSUS = '0x0112Bf6e83497965A5fdD6Dad1E447a6E004271D'
-                const BRADBURY_RPC = 'https://rpc-bradbury.genlayer.com'
+                // Studionet consensus contract (emits NewTransaction event)
+                const CONSENSUS_CONTRACT = '0x0112Bf6e83497965A5fdD6Dad1E447a6E004271D'
+                const GENLAYER_RPC = 'https://studio.genlayer.com/api'
 
                 let genLayerTxId = txHash
 
@@ -71,7 +71,7 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
                         await new Promise(r => setTimeout(r, 5000))
                         if (!pollingRef.current) return
                         try {
-                            const res = await fetch(BRADBURY_RPC, {
+                            const res = await fetch(GENLAYER_RPC, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getTransactionReceipt', params: [evmHash] }),
@@ -90,7 +90,7 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
                             // topics[1] is the indexed bytes32 txId (first indexed field)
                             // eslint-disable-next-line @typescript-eslint/no-explicit-any
                             const log = receipt.logs?.find((l: any) =>
-                                l.address?.toLowerCase() === BRADBURY_CONSENSUS.toLowerCase() &&
+                                l.address?.toLowerCase() === CONSENSUS_CONTRACT.toLowerCase() &&
                                 Array.isArray(l.topics) && l.topics.length >= 2
                             )
                             if (log?.topics?.[1]) {
@@ -111,62 +111,43 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
                     }
                 }
 
-                // ── Phase 2: poll consensus MAIN contract events ─────────────────
-                // getTransactionData (consensus DATA contract) internally calls the
-                // ZKSync-OS VM which is unreliable on Bradbury.  Instead poll
-                // eth_getLogs on the consensus MAIN contract — pure Ethereum events,
-                // no VM involved.  txId is topics[1] (first indexed field).
+                // ── Phase 2: poll gen_getTransactionStatus ───────────────────────
+                // Native GenLayer RPC — works on Studionet without ZKSync-OS VM.
+                // Status codes: 1=PENDING, 2=CANCELED, 3=UNDETERMINED, 4=ACCEPTED, 5=FINALIZED
                 setTxStatus('PENDING')
-                const BRADBURY_MAIN = '0x0112Bf6e83497965A5fdD6Dad1E447a6E004271D'
-                // keccak256 of terminal event signatures (precomputed)
-                const ACCEPTED_SIG     = '0xf250caa116f9eac0e4e82d403f131ce0a520b6c232dbcbe270b3729b0aaca09e'
-                const FINALIZED_SIG    = '0x24196ec40f90671b7144e716978686b4f3c7d6b00b23da3971ef2b52af27d87f'
-                const CANCELLED_SIG    = '0x0a94f6cf3e473cb72e765b24d1365bfcbef8d31a73215bb27e50df39757f578a'
-                const UNDETERMINED_SIG = '0xb9f69df2250e1788b862d0715b1dad98b2a50311c017ebb71f6cd83de656b06d'
-
-                // Pad txId to 32 bytes for topic matching
-                const txIdTopic = genLayerTxId.startsWith('0x')
-                    ? genLayerTxId
-                    : '0x' + genLayerTxId
 
                 for (let i = 0; i < 120 && pollingRef.current; i++) {
                     await new Promise(r => setTimeout(r, 5000))
                     if (!pollingRef.current) break
                     try {
-                        const res = await fetch(BRADBURY_RPC, {
+                        const res = await fetch(GENLAYER_RPC, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
                                 jsonrpc: '2.0', id: 1,
-                                method: 'eth_getLogs',
-                                params: [{
-                                    address: BRADBURY_MAIN,
-                                    topics: [
-                                        [ACCEPTED_SIG, FINALIZED_SIG, CANCELLED_SIG, UNDETERMINED_SIG],
-                                        txIdTopic
-                                    ],
-                                    fromBlock: 'earliest',
-                                    toBlock: 'latest'
-                                }]
+                                method: 'gen_getTransactionStatus',
+                                params: [genLayerTxId]
                             })
                         })
                         // eslint-disable-next-line @typescript-eslint/no-explicit-any
                         const j: any = await res.json()
-                        const logs: Array<{ topics: string[] }> = j?.result ?? []
-                        if (logs.length > 0) {
-                            const sig = logs[0].topics[0]
-                            if (sig === ACCEPTED_SIG || sig === FINALIZED_SIG) {
-                                pollingRef.current = false
-                                setTxStatus('ACCEPTED')
-                                await onUpdate()
-                            } else {
-                                pollingRef.current = false
-                                setTxStatus('REJECTED')
-                            }
+                        const status: number = j?.result
+                        console.log('[genlayer] gen_getTransactionStatus poll', i, 'status:', status)
+                        if (status === 4 || status === 5) {
+                            // ACCEPTED or FINALIZED
+                            pollingRef.current = false
+                            setTxStatus('ACCEPTED')
+                            await onUpdate()
+                            break
+                        } else if (status === 2 || status === 3) {
+                            // CANCELED or UNDETERMINED
+                            pollingRef.current = false
+                            setTxStatus('REJECTED')
                             break
                         }
+                        // status === 1 (PENDING) → keep polling
                     } catch (e) {
-                        console.warn('[genlayer] eth_getLogs poll', i, e)
+                        console.warn('[genlayer] gen_getTransactionStatus poll', i, e)
                     }
                 }
                 if (pollingRef.current) { pollingRef.current = false; setTxStatus('TIMEOUT') }
