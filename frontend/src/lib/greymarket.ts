@@ -36,12 +36,24 @@ export type Market = {
 
 export async function getAllMarkets(): Promise<Market[]> {
     try {
-        const result = await client.readContract({
+        // get_all_markets fails on Studionet (DynArray<TreeMap> serialization bug).
+        // Instead: read count first, then fetch each market individually.
+        const count = await client.readContract({
             address: CONTRACT_ADDRESS,
-            functionName: 'get_all_markets',
+            functionName: 'get_market_count',
             args: [],
-        })
-        return (result as Market[]) ?? []
+        }) as number
+        if (!count || count === 0) return []
+        const results = await Promise.all(
+            Array.from({ length: count }, (_, i) =>
+                client.readContract({
+                    address: CONTRACT_ADDRESS,
+                    functionName: 'get_market',
+                    args: [i],
+                }).catch(() => null)
+            )
+        )
+        return results.filter(Boolean) as Market[]
     } catch {
         return []
     }

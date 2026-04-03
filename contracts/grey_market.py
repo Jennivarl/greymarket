@@ -23,15 +23,6 @@ class Market:
     pot: u256               # total fake USDC in the pot
 
 
-@allow_storage
-@dataclass
-class Bet:
-    market_id: u256
-    bettor: Address
-    position: str           # "YES" or "NO"
-    amount: u256
-
-
 class GreyMarket(gl.Contract):
     """
     GreyMarket — Qualitative prediction markets resolved by AI consensus.
@@ -44,8 +35,6 @@ class GreyMarket(gl.Contract):
     """
 
     markets: TreeMap[u256, Market]
-    user_bets: TreeMap[Address, DynArray[Bet]]
-    market_bets: TreeMap[u256, DynArray[Bet]]
     market_count: u256
     balances: TreeMap[Address, u256]
 
@@ -125,22 +114,7 @@ class GreyMarket(gl.Contract):
         # Lock the bet amount
         self.balances[bettor] = u256(int(self.balances[bettor]) - amount)
 
-        bet = Bet(
-            market_id=mid,
-            bettor=bettor,
-            position=position,
-            amount=u256(amount),
-        )
-
-        if bettor not in self.user_bets:
-            self.user_bets[bettor] = DynArray[Bet]()
-        self.user_bets[bettor].append(bet)
-
-        if mid not in self.market_bets:
-            self.market_bets[mid] = DynArray[Bet]()
-        self.market_bets[mid].append(bet)
-
-        # total_yes / total_no track GUSDC volume (not bet count)
+        # Update market volume totals
         if position == "YES":
             market.total_yes = u256(int(market.total_yes) + amount)
         else:
@@ -241,19 +215,6 @@ Return ONLY valid JSON with these exact keys:
         verdict = result.get("verdict", "NO")
         reasoning = str(result.get("reasoning", "")).strip()[:500]
         confidence = max(50, min(100, int(result.get("confidence", 70))))
-
-        # Distribute pot to winners proportionally (by amount wagered)
-        if mid in self.market_bets and int(market.pot) > 0:
-            winning_volume = int(market.total_yes) if verdict == "YES" else int(market.total_no)
-            if winning_volume > 0:
-                pot = int(market.pot)
-                for bet in self.market_bets[mid]:
-                    if bet.position == verdict:
-                        addr = bet.bettor
-                        payout = pot * int(bet.amount) // winning_volume
-                        if addr not in self.balances:
-                            self.balances[addr] = u256(0)
-                        self.balances[addr] = u256(int(self.balances[addr]) + payout)
 
         market.resolved = True
         market.outcome = verdict

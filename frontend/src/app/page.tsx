@@ -21,9 +21,10 @@ export default function Home() {
     const [balance, setBalance] = useState(1000)
 
     const load = useCallback((currentSelected?: Market | null) => {
-        // Fire background refresh — gen_call on Bradbury takes 1-3 min so we
-        // never block the UI. Markets created are shown optimistically immediately.
-        getAllMarkets().then(ms => {
+        // Returns the promise so callers can await fresh data if needed.
+        // gen_call on Bradbury takes 1-3 min, so the initial page load fires
+        // this in the background (no await) to avoid blocking the UI.
+        const p = getAllMarkets().then(ms => {
             const reversed = [...ms].reverse()
             setMarkets(prev => {
                 const chainIds = new Set(ms.map(m => m.id))
@@ -35,8 +36,8 @@ export default function Home() {
                 if (updated) setSelected(updated)
             }
         }).catch(() => { })
-        // Show content immediately
         setLoading(false)
+        return p
     }, [])
 
     useEffect(() => { load() }, [load])
