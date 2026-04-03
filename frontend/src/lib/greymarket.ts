@@ -8,14 +8,14 @@ function toAddress(s: string): GL_Address {
 }
 
 export const CONTRACT_ADDRESS: GL_Address = toAddress(
-    process.env.NEXT_PUBLIC_GM_CONTRACT_ADDRESS ||
+    process.env.NEXT_PUBLIC_CONTRACT_ADDRESS ||
     '0x0000000000000000000000000000000000000000'
 )
 
 // Single client: genlayer-js 0.23.1 uses gen_call for reads (always HTTP)
 // and eth_sendTransaction to the consensus contract for writes (MetaMask signs).
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const client = createClient({ chain: (chains as any).testnetBradbury })
+export const client = createClient({ chain: (chains as any).studionet })
 
 export type Market = {
     id: number
@@ -62,12 +62,58 @@ export async function getBalance(address: string): Promise<number> {
 
 // ── Write helpers ─────────────────────────────────────────
 
-// Bradbury often takes >30s to reach consensus; writeContract may throw
-// "Transaction not processed by consensus" even after MetaMask has signed and
-// the tx has been broadcast.  Treat that as a successful submission.
+// Bradbury often takes >30s; writeContract may throw a timeout even after MetaMask
+// has successfully broadcast the tx. Detect those so we can fall back gracefully.
 function isConsensusTimeout(err: unknown): boolean {
     const msg = String(err).toLowerCase()
     return msg.includes('not processed by consensus') || msg.includes('consensus')
+        || msg.includes('waitfortransactionreceipt') || msg.includes('could not be confirmed')
+}
+
+// Wrap window.ethereum.request temporarily to sniff the Ethereum tx hash that
+// MetaMask returns for eth_sendTransaction — BEFORE genlayer-js calls
+// waitForTransactionReceipt (which can timeout).  This gives us the hash
+// reliably regardless of what error shape viem throws later.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function writeContractCaptured(args: Record<string, unknown>): Promise<string> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ethereum = (typeof window !== 'undefined' ? (window as any).ethereum : null)
+    let capturedEvmHash: string | null = null
+
+    if (ethereum) {
+        const originalRequest = ethereum.request.bind(ethereum)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ethereum.request = async (req: any) => {
+            const result = await originalRequest(req)
+            if (req?.method === 'eth_sendTransaction' && typeof result === 'string') {
+                capturedEvmHash = result
+            }
+            return result
+        }
+        try {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const txId = await (client as any).writeContract(args)
+            return String(txId)
+        } catch (err) {
+            if (isConsensusTimeout(err)) {
+                console.error('[genlayer] writeContract timeout. capturedEvmHash:', capturedEvmHash, 'err:', err)
+                return capturedEvmHash ? `eth:${capturedEvmHash}` : 'pending'
+            }
+            throw err
+        } finally {
+            ethereum.request = originalRequest
+        }
+    }
+
+    // No window.ethereum (SSR / non-MetaMask path) — fall back
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const txId = await (client as any).writeContract(args)
+        return String(txId)
+    } catch (err) {
+        if (isConsensusTimeout(err)) return 'pending'
+        throw err
+    }
 }
 
 export async function createMarket(
@@ -77,20 +123,13 @@ export async function createMarket(
     deadline: number
 ): Promise<string> {
     const account = { address: toAddress(senderAddress), type: 'json-rpc' as const }
-    try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const txId = await (client as any).writeContract({
-            address: CONTRACT_ADDRESS,
-            functionName: 'create_market',
-            args: [question, context, deadline],
-            account,
-            value: 0n,
-        })
-        return String(txId)
-    } catch (err) {
-        if (isConsensusTimeout(err)) return 'pending'
-        throw err
-    }
+    return writeContractCaptured({
+        address: CONTRACT_ADDRESS,
+        functionName: 'create_market',
+        args: [question, context, deadline],
+        account,
+        value: 0n,
+    })
 }
 
 export async function placeBet(
@@ -100,20 +139,13 @@ export async function placeBet(
     amount: number
 ): Promise<string> {
     const account = { address: toAddress(senderAddress), type: 'json-rpc' as const }
-    try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const txId = await (client as any).writeContract({
-            address: CONTRACT_ADDRESS,
-            functionName: 'place_bet',
-            args: [marketId, position, amount],
-            account,
-            value: 0n,
-        })
-        return String(txId)
-    } catch (err) {
-        if (isConsensusTimeout(err)) return 'pending'
-        throw err
-    }
+    return writeContractCaptured({
+        address: CONTRACT_ADDRESS,
+        functionName: 'place_bet',
+        args: [marketId, position, amount],
+        account,
+        value: 0n,
+    })
 }
 
 export async function resolveMarket(
@@ -121,18 +153,11 @@ export async function resolveMarket(
     marketId: number
 ): Promise<string> {
     const account = { address: toAddress(senderAddress), type: 'json-rpc' as const }
-    try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const txId = await (client as any).writeContract({
-            address: CONTRACT_ADDRESS,
-            functionName: 'resolve_market',
-            args: [marketId],
-            account,
-            value: 0n,
-        })
-        return String(txId)
-    } catch (err) {
-        if (isConsensusTimeout(err)) return 'pending'
-        throw err
-    }
+    return writeContractCaptured({
+        address: CONTRACT_ADDRESS,
+        functionName: 'resolve_market',
+        args: [marketId],
+        account,
+        value: 0n,
+    })
 }
