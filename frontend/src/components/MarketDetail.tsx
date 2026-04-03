@@ -126,26 +126,27 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
                             body: JSON.stringify({
                                 jsonrpc: '2.0', id: 1,
                                 method: 'gen_getTransactionStatus',
-                                params: [genLayerTxId]
+                                params: [{ txId: genLayerTxId }]
                             })
                         })
                         // eslint-disable-next-line @typescript-eslint/no-explicit-any
                         const j: any = await res.json()
-                        const status: number = j?.result
-                        console.log('[genlayer] gen_getTransactionStatus poll', i, 'status:', status)
-                        if (status === 4 || status === 5) {
-                            // ACCEPTED or FINALIZED
+                        const statusCode: number = j?.result?.statusCode
+                        const statusName: string = j?.result?.status
+                        console.log('[genlayer] gen_getTransactionStatus poll', i, statusName, statusCode)
+                        if (statusCode === 5 || statusCode === 7) {
+                            // 5=ACCEPTED, 7=FINALIZED
                             pollingRef.current = false
                             setTxStatus('ACCEPTED')
                             await onUpdate()
                             break
-                        } else if (status === 2 || status === 3) {
-                            // CANCELED or UNDETERMINED
+                        } else if (statusCode === 6 || statusCode === 8 || statusCode === 12 || statusCode === 13) {
+                            // 6=UNDETERMINED, 8=CANCELED, 12=VALIDATORS_TIMEOUT, 13=LEADER_TIMEOUT
                             pollingRef.current = false
                             setTxStatus('REJECTED')
                             break
                         }
-                        // status === 1 (PENDING) → keep polling
+                        // 1=PENDING, 2=PROPOSING, 3=COMMITTING, 4=REVEALING → keep polling
                     } catch (e) {
                         console.warn('[genlayer] gen_getTransactionStatus poll', i, e)
                     }
