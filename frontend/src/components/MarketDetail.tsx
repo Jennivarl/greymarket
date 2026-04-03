@@ -111,17 +111,17 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
                     }
                 }
 
-                // ── Phase 2: poll eth_getLogs on Studionet consensus MAIN contract ──
-                // gen_getTransactionStatus has a psycopg2 bug on hosted Studionet.
-                // eth_getLogs on the consensus MAIN contract works fine — pure EVM events.
-                // Studionet consensus MAIN: 0xb7278A61aa25c888815aFC32Ad3cC52fF24fE575
+                // ── Phase 2: poll getTransactionStatus(bytes32) view fn on consensus MAIN ──
+                // eth_call to getTransactionStatus is reliable on Studionet (system contract).
+                // Status codes: 5=ACCEPTED, 7=FINALIZED, 6=UNDETERMINED, 8=CANCELED,
+                //   12=VALIDATORS_TIMEOUT, 13=LEADER_TIMEOUT, 1=PENDING, 2-4=in-progress
                 setTxStatus('PENDING')
                 const STUDIO_MAIN = '0xb7278A61aa25c888815aFC32Ad3cC52fF24fE575'
-                const ACCEPTED_SIG = '0xf250caa116f9eac0e4e82d403f131ce0a520b6c232dbcbe270b3729b0aaca09e'
-                const FINALIZED_SIG = '0x24196ec40f90671b7144e716978686b4f3c7d6b00b23da3971ef2b52af27d87f'
-                const CANCELLED_SIG = '0x0a94f6cf3e473cb72e765b24d1365bfcbef8d31a73215bb27e50df39757f578a'
-                const UNDETERMINED_SIG = '0xb9f69df2250e1788b862d0715b1dad98b2a50311c017ebb71f6cd83de656b06d'
-                const txIdTopic = genLayerTxId.startsWith('0x') ? genLayerTxId : '0x' + genLayerTxId
+                // selector = keccak256('getTransactionStatus(bytes32)')[:4] = 0x94407465
+                const GET_STATUS_SELECTOR = '0x94407465'
+                const txIdHex = genLayerTxId.startsWith('0x') ? genLayerTxId.slice(2) : genLayerTxId
+                const txIdPadded = txIdHex.padStart(64, '0')
+                const callData = GET_STATUS_SELECTOR + txIdPadded
 
                 for (let i = 0; i < 120 && pollingRef.current; i++) {
                     await new Promise(r => setTimeout(r, 5000))
@@ -132,36 +132,29 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
                                 jsonrpc: '2.0', id: 1,
-                                method: 'eth_getLogs',
-                                params: [{
-                                    address: STUDIO_MAIN,
-                                    topics: [
-                                        [ACCEPTED_SIG, FINALIZED_SIG, CANCELLED_SIG, UNDETERMINED_SIG],
-                                        txIdTopic
-                                    ],
-                                    fromBlock: 'earliest',
-                                    toBlock: 'latest'
-                                }]
+                                method: 'eth_call',
+                                params: [{ to: STUDIO_MAIN, data: callData }, 'latest']
                             })
                         })
                         // eslint-disable-next-line @typescript-eslint/no-explicit-any
                         const j: any = await res.json()
-                        const logs: Array<{ topics: string[] }> = j?.result ?? []
-                        console.log('[genlayer] eth_getLogs poll', i, 'logs:', logs.length)
-                        if (logs.length > 0) {
-                            const sig = logs[0].topics[0]
-                            if (sig === ACCEPTED_SIG || sig === FINALIZED_SIG) {
-                                pollingRef.current = false
-                                setTxStatus('ACCEPTED')
-                                await onUpdate()
-                            } else {
-                                pollingRef.current = false
-                                setTxStatus('REJECTED')
-                            }
+                        const statusCode = j?.result ? parseInt(j.result, 16) : -1
+                        console.log('[genlayer] getTransactionStatus poll', i, 'status:', statusCode)
+                        if (statusCode === 5 || statusCode === 7) {
+                            // ACCEPTED or FINALIZED
+                            pollingRef.current = false
+                            setTxStatus('ACCEPTED')
+                            await onUpdate()
+                            break
+                        } else if (statusCode === 6 || statusCode === 8 || statusCode === 12 || statusCode === 13) {
+                            // UNDETERMINED, CANCELED, VALIDATORS_TIMEOUT, LEADER_TIMEOUT
+                            pollingRef.current = false
+                            setTxStatus('REJECTED')
                             break
                         }
+                        // else 1=PENDING, 2=PROPOSING, 3=COMMITTING, 4=REVEALING, 9-11=appeal → keep polling
                     } catch (e) {
-                        console.warn('[genlayer] eth_getLogs poll', i, e)
+                        console.warn('[genlayer] getTransactionStatus poll', i, e)
                     }
                 }
                 if (pollingRef.current) { pollingRef.current = false; setTxStatus('TIMEOUT') }
