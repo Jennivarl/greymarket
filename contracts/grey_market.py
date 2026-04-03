@@ -1,4 +1,4 @@
-# { "Depends": "py-genlayer:15qfivjvy80800rh998pcxmd2m8va1wq2qzqhz850n8ggcr4i9q0" }
+# { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 
 from genlayer import *
 from dataclasses import dataclass
@@ -37,6 +37,8 @@ class GreyMarket(gl.Contract):
     markets: TreeMap[u256, Market]
     market_count: u256
     balances: TreeMap[Address, u256]
+    yes_bets: TreeMap[str, u256]   # key: "{market_id}:{address}" → amt bet YES
+    no_bets: TreeMap[str, u256]    # key: "{market_id}:{address}" → amt bet NO
 
     def __init__(self) -> None:
         self.market_count = u256(0)
@@ -122,6 +124,15 @@ class GreyMarket(gl.Contract):
         market.pot = u256(int(market.pot) + amount)
         self.markets[mid] = market
 
+        # Record individual bet for on-chain ledger
+        bet_key = f"{int(mid)}:{str(bettor)}"
+        if position == "YES":
+            prev = int(self.yes_bets[bet_key]) if bet_key in self.yes_bets else 0
+            self.yes_bets[bet_key] = u256(prev + amount)
+        else:
+            prev = int(self.no_bets[bet_key]) if bet_key in self.no_bets else 0
+            self.no_bets[bet_key] = u256(prev + amount)
+
     @gl.public.write
     def resolve_market(self, market_id_int: int) -> None:
         """
@@ -145,18 +156,17 @@ class GreyMarket(gl.Contract):
         question = market.question
         context_url = market.context
 
-        def fetch_and_judge():
-            # Encode query for URL
-            q_encoded = question.replace(" ", "+").replace("?", "%3F").replace('"', '').replace("'", "")
+        # Encode query for URL
+        q_encoded = question.replace(" ", "+").replace("?", "%3F").replace('"', '').replace("'", "")
 
-            # Fetch web evidence from DuckDuckGo search
+        def nondet() -> str:
+            # Fetch web evidence inside non-deterministic block
             evidence = ""
             try:
-                search_result = gl.get_webpage(
-                    f"https://html.duckduckgo.com/html/?q={q_encoded}",
-                    mode="text"
+                search_response = gl.nondet.web.get(
+                    f"https://html.duckduckgo.com/html/?q={q_encoded}"
                 )
-                evidence = search_result[:4000]
+                evidence = search_response.body.decode("utf-8")[:4000]
             except Exception:
                 evidence = "Web search unavailable — reasoning from training knowledge only."
 
@@ -164,8 +174,8 @@ class GreyMarket(gl.Contract):
             extra_context = ""
             if context_url and context_url.startswith("http"):
                 try:
-                    page = gl.get_webpage(context_url, mode="text")
-                    extra_context = f"\n\nADDITIONAL SOURCE:\n{page[:2000]}"
+                    page_response = gl.nondet.web.get(context_url)
+                    extra_context = f"\n\nADDITIONAL SOURCE:\n{page_response.body.decode('utf-8')[:2000]}"
                 except Exception:
                     pass
 
@@ -192,25 +202,10 @@ Return ONLY valid JSON with these exact keys:
   "reasoning": "<2-3 sentences explaining your verdict with specific evidence>"
 }}"""
 
-            response = gl.nondet.exec_prompt(prompt)
-            return json.loads(response)
+            raw = gl.nondet.exec_prompt(prompt).replace("```json", "").replace("```", "")
+            return json.dumps(json.loads(raw), sort_keys=True)
 
-        def validate(leader_result) -> bool:
-            if not isinstance(leader_result, gl.vm.Return):
-                return False
-            ld = leader_result.calldata
-            if not isinstance(ld, dict):
-                return False
-            if ld.get("verdict") not in ("YES", "NO"):
-                return False
-            try:
-                vd = fetch_and_judge()
-            except Exception:
-                return False
-            # Validators must agree on verdict direction
-            return ld.get("verdict") == vd.get("verdict")
-
-        result = gl.vm.run_nondet_unsafe(fetch_and_judge, validate)
+        result = json.loads(gl.eq_principle.strict_eq(nondet))
 
         verdict = result.get("verdict", "NO")
         reasoning = str(result.get("reasoning", "")).strip()[:500]
@@ -255,3 +250,19 @@ Return ONLY valid JSON with these exact keys:
     def get_market_count(self) -> int:
         """Return the total number of markets created."""
         return int(self.market_count)
+
+    @gl.public.view
+    def get_user_yes_bet(self, market_id_int: int, addr: str) -> int:
+        """Return how much GUSDC this address has bet YES on the given market."""
+        key = f"{market_id_int}:{addr}"
+        if key not in self.yes_bets:
+            return 0
+        return int(self.yes_bets[key])
+
+    @gl.public.view
+    def get_user_no_bet(self, market_id_int: int, addr: str) -> int:
+        """Return how much GUSDC this address has bet NO on the given market."""
+        key = f"{market_id_int}:{addr}"
+        if key not in self.no_bets:
+            return 0
+        return int(self.no_bets[key])

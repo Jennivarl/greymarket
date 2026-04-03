@@ -8,7 +8,7 @@ function toAddress(s: string): GL_Address {
 }
 
 export const CONTRACT_ADDRESS: GL_Address = toAddress(
-    (process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || '0x7f81b37E0cCADE1401fA80691153127BF8674DF9').trim()
+    (process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || '0x802e4a8774a2dC09ea0CC2A822aF5Ab5362f7A98').trim()
 )
 
 // Single client: genlayer-js 0.23.1 uses gen_call for reads (always HTTP)
@@ -171,4 +171,27 @@ export async function resolveMarket(
         account,
         value: 0n,
     })
+}
+
+export async function getUserBets(
+    marketId: number,
+    address: string
+): Promise<{ yes: number; no: number }> {
+    try {
+        const [yes, no] = await Promise.all([
+            client.readContract({
+                address: CONTRACT_ADDRESS,
+                functionName: 'get_user_yes_bet',
+                args: [marketId, address],
+            }),
+            client.readContract({
+                address: CONTRACT_ADDRESS,
+                functionName: 'get_user_no_bet',
+                args: [marketId, address],
+            }),
+        ])
+        return { yes: (yes as number) || 0, no: (no as number) || 0 }
+    } catch {
+        return { yes: 0, no: 0 }
+    }
 }

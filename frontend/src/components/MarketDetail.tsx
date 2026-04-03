@@ -2,21 +2,19 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { type Market, placeBet, resolveMarket } from '@/lib/greymarket'
-import { saveBet } from '@/lib/bets'
 import { useWallet } from '@/hooks/useWallet'
 
 interface Props {
     market: Market
     userBalance: number
     onUpdate: () => void
-    onBetSaved?: () => void
 }
 
 function formatDeadline(deadline: number): string {
     return new Date(deadline * 1000).toLocaleString()
 }
 
-export default function MarketDetail({ market, userBalance, onUpdate, onBetSaved }: Props) {
+export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
     const { address, connect, isConnecting } = useWallet()
     const [betting, setBetting] = useState(false)
     const [resolving, setResolving] = useState(false)
@@ -164,17 +162,6 @@ export default function MarketDetail({ market, userBalance, onUpdate, onBetSaved
                             setDisplayNo(prev => pos === 'NO' ? prev + amt : prev)
                             setDisplayPot(prev => prev + amt)
                             setDisplayBalance(prev => prev - amt)
-                            // Save to localStorage so My Bets can show it
-                            if (address) {
-                                saveBet(address, {
-                                    marketId: market.id,
-                                    question: market.question,
-                                    position: pos,
-                                    amount: amt,
-                                    timestamp: Date.now(),
-                                })
-                                onBetSaved?.()
-                            }
                             await onUpdate()
                             break
                         } else if (

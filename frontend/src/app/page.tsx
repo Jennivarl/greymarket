@@ -1,8 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { getAllMarkets, getBalance, type Market } from '@/lib/greymarket'
-import { loadBets, type UserBet } from '@/lib/bets'
+import { getAllMarkets, getBalance, getUserBets, type Market } from '@/lib/greymarket'
 import GreyMarketLogo from '@/components/GreyMarketLogo'
 import WalletButton from '@/components/WalletButton'
 import MarketCard from '@/components/MarketCard'
@@ -20,14 +19,19 @@ export default function Home() {
     const [dark, setDark] = useState(false)
     const { address } = useWallet()
     const [balance, setBalance] = useState(1000)
-    const [myBets, setMyBets] = useState<UserBet[]>([])
+    const [myBets, setMyBets] = useState<{ marketId: number; question: string; position: 'YES' | 'NO'; amount: number }[]>([])
 
-    const refreshBets = useCallback(() => {
-        if (address) setMyBets(loadBets(address))
-        else setMyBets([])
-    }, [address])
-
-    useEffect(() => { refreshBets() }, [refreshBets])
+    const loadMyBets = useCallback(async (marketList: Market[], addr: string) => {
+        const rows: { marketId: number; question: string; position: 'YES' | 'NO'; amount: number }[] = []
+        await Promise.all(
+            marketList.map(async (m) => {
+                const { yes, no } = await getUserBets(m.id, addr)
+                if (yes > 0) rows.push({ marketId: m.id, question: m.question, position: 'YES', amount: yes })
+                if (no > 0) rows.push({ marketId: m.id, question: m.question, position: 'NO', amount: no })
+            })
+        )
+        setMyBets(rows)
+    }, [])
 
     const load = useCallback((currentSelected?: Market | null) => {
         // Returns the promise so callers can await fresh data if needed.
@@ -44,10 +48,11 @@ export default function Home() {
                 const updated = ms.find(m => m.id === currentSelected.id)
                 if (updated) setSelected(updated)
             }
+            if (address) loadMyBets(ms, address).catch(() => { })
         }).catch(() => { })
         setLoading(false)
         return p
-    }, [])
+    }, [address, loadMyBets])
 
     useEffect(() => { load() }, [load])
 
@@ -294,11 +299,9 @@ export default function Home() {
                         <MarketDetail
                             market={selected}
                             userBalance={balance}
-                            onBetSaved={refreshBets}
                             onUpdate={async () => {
                                 await load(selected)
                                 if (address) getBalance(address).then(setBalance)
-                                refreshBets()
                             }}
                         />
                     ) : (
