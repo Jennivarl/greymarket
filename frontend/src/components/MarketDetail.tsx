@@ -422,7 +422,7 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
                                 <span className="font-semibold" style={{ color: 'var(--accent-light)' }}>Waiting for block confirmation…</span>
                             </div>
                             <p style={{ color: 'var(--muted)', lineHeight: 1.6 }}>
-                                Signed by MetaMask — waiting for the Ethereum tx to be mined on Bradbury. Will hand off to GenLayer validators automatically once confirmed.
+                                Signed by MetaMask — waiting for the Ethereum tx to be mined on Studionet. Will hand off to GenLayer validators automatically once confirmed.
                             </p>
                         </>
                     ) : txStatus === 'INFRA_ERROR' ? (
@@ -468,7 +468,7 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
                             </div>
                             <p style={{ color: 'var(--muted)', lineHeight: 1.6 }}>
                                 GenLayer validators must independently reach consensus before confirming.
-                                On Bradbury this takes <strong style={{ color: 'var(--foreground)' }}>1–5 minutes</strong>.
+                                On Studionet this usually takes <strong style={{ color: 'var(--foreground)' }}>under a minute</strong>.
                                 This page updates automatically — no need to refresh.
                             </p>
                             {txHash !== 'pending' && (
