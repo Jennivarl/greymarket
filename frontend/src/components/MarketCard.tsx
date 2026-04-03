@@ -99,10 +99,10 @@ export default function MarketCard({ market, selected, onClick }: Props) {
                 </div>
                 <div className="flex justify-between">
                     <span className="cc-label" style={{ color: 'var(--success)' }}>
-                        YES {yesPct}% · {market.total_yes} bets
+                        YES {yesPct}% · {market.total_yes} GUSDC
                     </span>
                     <span className="cc-label" style={{ color: 'var(--error)' }}>
-                        {market.total_no} bets · {noPct}% NO
+                        {market.total_no} GUSDC · {noPct}% NO
                     </span>
                 </div>
             </div>
