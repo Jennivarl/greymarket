@@ -71,6 +71,32 @@ export async function getBalance(address: string): Promise<number> {
     }
 }
 
+export async function getMarketCount(): Promise<number> {
+    try {
+        const result = await client.readContract({
+            address: CONTRACT_ADDRESS,
+            functionName: 'get_market_count',
+            args: [],
+        })
+        return result as number
+    } catch {
+        return 0
+    }
+}
+
+export async function getMarket(marketId: number): Promise<Market | null> {
+    try {
+        const result = await client.readContract({
+            address: CONTRACT_ADDRESS,
+            functionName: 'get_market',
+            args: [marketId],
+        })
+        return result as Market
+    } catch {
+        return null
+    }
+}
+
 // ── Write helpers ─────────────────────────────────────────
 
 // Bradbury often takes >30s; writeContract may throw a timeout even after MetaMask
@@ -171,27 +197,4 @@ export async function resolveMarket(
         account,
         value: 0n,
     })
-}
-
-export async function getUserBets(
-    marketId: number,
-    address: string
-): Promise<{ yes: number; no: number }> {
-    try {
-        const [yes, no] = await Promise.all([
-            client.readContract({
-                address: CONTRACT_ADDRESS,
-                functionName: 'get_user_yes_bet',
-                args: [marketId, address],
-            }),
-            client.readContract({
-                address: CONTRACT_ADDRESS,
-                functionName: 'get_user_no_bet',
-                args: [marketId, address],
-            }),
-        ])
-        return { yes: (yes as number) || 0, no: (no as number) || 0 }
-    } catch {
-        return { yes: 0, no: 0 }
-    }
 }

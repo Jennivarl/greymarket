@@ -11,7 +11,7 @@ function toAddress(s: string): GL_Address {
 // Update CONTRACT_ADDRESS after deploying via GenLayer Studio or CLI
 // ----------------------------------------------------------------
 export const CONTRACT_ADDRESS: GL_Address = toAddress(
-    (process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || '0x802e4a8774a2dC09ea0CC2A822aF5Ab5362f7A98').trim()
+    (process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || '0xAfa388201CE193ec56Bdc2A430D406eFB95Cc8a5').trim()
 )
 
 const studionet = {

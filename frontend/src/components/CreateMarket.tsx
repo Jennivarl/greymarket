@@ -14,8 +14,8 @@ const DEMO_MARKETS = [
         context: 'https://dorahacks.io/hackathon/genlayer',
     },
     {
-        question: 'Did OpenAI\'s shift to a for-profit structure in 2025 meaningfully compromise its original safety-first mission?',
-        context: '',
+        question: 'Has the GenLayer approach of using AI validators to resolve disputes proven more trustworthy than traditional oracle networks like Chainlink for subjective questions?',
+        context: 'https://genlayer.com',
     },
     {
         question: 'Has Ethereum\'s rollup-centric roadmap strengthened or weakened its competitive position against Solana over the past 12 months?',
@@ -60,7 +60,7 @@ export default function CreateMarket({ onSuccess }: Props) {
             setTxHash(hash)
             // Build optimistic market object so UI updates instantly
             const optimisticMarket: Market = {
-                id: Date.now(), // temp local id
+                id: -1, // temp local id — replaced once chain refresh completes
                 question: question.trim(),
                 context: contextWithNiche,
                 deadline,

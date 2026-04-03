@@ -8,13 +8,14 @@ interface Props {
     market: Market
     userBalance: number
     onUpdate: () => void
+    onBetAccepted?: (marketId: number, question: string, position: 'YES' | 'NO', amount: number) => void
 }
 
 function formatDeadline(deadline: number): string {
     return new Date(deadline * 1000).toLocaleString()
 }
 
-export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
+export default function MarketDetail({ market, userBalance, onUpdate, onBetAccepted }: Props) {
     const { address, connect, isConnecting } = useWallet()
     const [betting, setBetting] = useState(false)
     const [resolving, setResolving] = useState(false)
@@ -27,22 +28,11 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
     const betPositionRef = useRef<'YES' | 'NO'>('YES')
     const betAmountRef = useRef(100)
 
-    // Optimistic display values — updated immediately on ACCEPTED so the
-    // user sees changes without waiting 1-3 min for gen_call to reflect
-    // the new contract state.
-    const [displayYes, setDisplayYes] = useState(market.total_yes)
-    const [displayNo, setDisplayNo] = useState(market.total_no)
-    const [displayPot, setDisplayPot] = useState(market.pot)
-    const [displayBalance, setDisplayBalance] = useState(userBalance)
-
-    // Sync optimistic state back to chain truth when the market prop updates
-    useEffect(() => {
-        setDisplayYes(market.total_yes)
-        setDisplayNo(market.total_no)
-        setDisplayPot(market.pot)
-    }, [market.total_yes, market.total_no, market.pot])
-
-    useEffect(() => { setDisplayBalance(userBalance) }, [userBalance])
+    const now = Math.floor(Date.now() / 1000)
+    const isExpired = now > market.deadline
+    const total = market.total_yes + market.total_no
+    const yesPct = total > 0 ? Math.round((market.total_yes / total) * 100) : 50
+    const noPct = 100 - yesPct
 
     function dismissTx() {
         pollingRef.current = false
@@ -56,13 +46,7 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
         setRefreshing(false)
     }
 
-    // Auto-poll tx status after a bet is placed.
-    // Two phases:
-    //   Phase 1 (only when txHash starts with 'eth:'): The SDK timed out before
-    //     extracting the GenLayer txId, but it saved the Ethereum tx hash for us.
-    //     Poll eth_getTransactionReceipt directly via RPC (no SDK timeout), then
-    //     parse the NewTransaction event log to get the real GenLayer txId.
-    //   Phase 2: Poll the GenLayer consensus data contract for the txId status.
+    // Poll eth_getTransactionByHash for GenLayer consensus status
     useEffect(() => {
         if (!txHash) return
 
@@ -74,13 +58,12 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
         pollingRef.current = true
 
             ; (async () => {
-                // ── Phase 1: Ethereum receipt → extract GenLayer txId ────────────
-                // Studionet consensus contract (emits NewTransaction event)
                 const CONSENSUS_CONTRACT = '0xb7278A61aa25c888815aFC32Ad3cC52fF24fE575'
                 const GENLAYER_RPC = 'https://studio.genlayer.com/api'
 
                 let genLayerTxId = txHash
 
+                // Phase 1: if we only have the EVM hash, extract the GenLayer txId
                 if (txHash.startsWith('eth:')) {
                     setTxStatus('MINING')
                     const evmHash = txHash.slice(4)
@@ -98,26 +81,23 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
                             // eslint-disable-next-line @typescript-eslint/no-explicit-any
                             const j: any = await res.json()
                             const receipt = j?.result
-                            if (!receipt) continue // not mined yet
+                            if (!receipt) continue
 
                             if (receipt.status === '0x0') {
                                 setTxStatus('REJECTED')
                                 pollingRef.current = false
                                 return
                             }
-                            // Find the NewTransaction log from the consensus contract
-                            // topics[1] is the indexed bytes32 txId (first indexed field)
                             // eslint-disable-next-line @typescript-eslint/no-explicit-any
                             const log = receipt.logs?.find((l: any) =>
                                 l.address?.toLowerCase() === CONSENSUS_CONTRACT.toLowerCase() &&
                                 Array.isArray(l.topics) && l.topics.length >= 2
                             )
                             if (log?.topics?.[1]) {
-                                genLayerTxId = log.topics[1]  // real GenLayer txId
+                                genLayerTxId = log.topics[1]
                                 found = true
                                 break
                             }
-                            // Receipt mined but no NewTransaction event → submission was rejected by consensus contract
                             setTxStatus('BROADCAST')
                             pollingRef.current = false
                             return
@@ -130,9 +110,7 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
                     }
                 }
 
-                // ── Phase 2: poll eth_getTransactionByHash for GenLayer status ──────
-                // Studionet returns GenLayer-specific fields (status as string name) in
-                // eth_getTransactionByHash. No need for broken gen_ RPCs or ABI calls.
+                // Phase 2: poll GenLayer status
                 setTxStatus('PENDING')
 
                 for (let i = 0; i < 120 && pollingRef.current; i++) {
@@ -142,61 +120,50 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
                         const res = await fetch(GENLAYER_RPC, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                jsonrpc: '2.0', id: 1,
-                                method: 'eth_getTransactionByHash',
-                                params: [genLayerTxId]
-                            })
+                            body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getTransactionByHash', params: [genLayerTxId] })
                         })
                         // eslint-disable-next-line @typescript-eslint/no-explicit-any
                         const j: any = await res.json()
                         const statusName: string = j?.result?.status ?? ''
-                        console.log('[genlayer] eth_getTransactionByHash poll', i, 'status:', statusName)
-                        if (statusName === 'FINALIZED' || statusName === 'ACCEPTED') {
+                        console.log('[genlayer] poll', i, statusName)
+
+                        if (statusName === 'FINALIZED' || statusName === 'ACCEPTED' || statusName === 'UNCONFIRMED') {
                             pollingRef.current = false
                             setTxStatus('ACCEPTED')
-                            // Optimistically update display before the slow gen_call refresh
                             const pos = betPositionRef.current
                             const amt = betAmountRef.current
-                            setDisplayYes(prev => pos === 'YES' ? prev + amt : prev)
-                            setDisplayNo(prev => pos === 'NO' ? prev + amt : prev)
-                            setDisplayPot(prev => prev + amt)
-                            setDisplayBalance(prev => prev - amt)
+                            onBetAccepted?.(market.id, market.question, pos, amt)
                             await onUpdate()
                             break
                         } else if (
-                            statusName === 'UNDETERMINED' || statusName === 'CANCELED' ||
+                            statusName === 'UNDETERMINED' ||
+                            statusName === 'CANCELED' || statusName === 'CANCELLED' ||
                             statusName === 'VALIDATORS_TIMEOUT' || statusName === 'LEADER_TIMEOUT'
                         ) {
                             pollingRef.current = false
                             setTxStatus('REJECTED')
                             break
                         } else if (statusName) {
-                            // Live progress: PENDING → PROPOSING → COMMITTING → REVEALING
                             setTxStatus(statusName)
                         }
-                        // null/empty = not yet indexed, keep polling
                     } catch (e) {
-                        console.warn('[genlayer] eth_getTransactionByHash poll', i, e)
+                        console.warn('[genlayer] poll error', e)
                     }
                 }
-                if (pollingRef.current) { pollingRef.current = false; setTxStatus('TIMEOUT') }
+                if (pollingRef.current) {
+                    pollingRef.current = false
+                    setTxStatus('TIMEOUT')
+                }
             })()
 
         return () => { pollingRef.current = false }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [txHash])
 
-    const now = Math.floor(Date.now() / 1000)
-    const isExpired = now > market.deadline
-    const total = displayYes + displayNo
-    const yesPct = total > 0 ? Math.round((displayYes / total) * 100) : 50
-    const noPct = 100 - yesPct
-
     async function handleBet(position: 'YES' | 'NO') {
         if (!address) return
         if (betAmount < 100) { setError('Minimum bet is 100 GUSDC'); return }
-        if (betAmount > displayBalance) { setError(`Insufficient balance — you only have ${displayBalance} GUSDC`); return }
+        if (betAmount > userBalance) { setError(`Insufficient balance — you only have ${userBalance} GUSDC`); return }
         betPositionRef.current = position
         betAmountRef.current = betAmount
         setBetting(true)
@@ -206,7 +173,7 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
         pollingRef.current = false
         try {
             const hash = await placeBet(address, market.id, position, betAmount)
-            setTxHash(hash)  // triggers the polling useEffect
+            setTxHash(hash)
         } catch (err) {
             setError(String(err))
         } finally {
@@ -269,8 +236,8 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
             <div className="grid grid-cols-3 gap-3">
                 {[
                     { label: 'Total Volume', value: `${total} GUSDC` },
-                    { label: 'Pot', value: `${displayPot} GUSDC` },
-                    { label: market.resolved ? 'Confidence' : 'Your Balance', value: market.resolved ? `${market.confidence}%` : `${displayBalance} GUSDC` },
+                    { label: 'Pot', value: `${market.pot} GUSDC` },
+                    { label: market.resolved ? 'Confidence' : 'Your Balance', value: market.resolved ? `${market.confidence}%` : `${userBalance} GUSDC` },
                 ].map(s => (
                     <div key={s.label} className="cc-card p-3 flex flex-col gap-0.5">
                         <span className="cc-label" style={{ color: 'var(--muted)' }}>{s.label}</span>
@@ -287,10 +254,10 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
                 </div>
                 <div className="flex justify-between">
                     <span className="text-sm font-semibold" style={{ color: 'var(--success)' }}>
-                        YES — {yesPct}% · {displayYes} GUSDC
+                        YES — {yesPct}% · {market.total_yes} GUSDC
                     </span>
                     <span className="text-sm font-semibold" style={{ color: 'var(--error)' }}>
-                        {displayNo} GUSDC · {noPct}% — NO
+                        {market.total_no} GUSDC · {noPct}% — NO
                     </span>
                 </div>
             </div>
@@ -340,18 +307,25 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
                     </svg>
                     {isConnecting ? 'Connecting…' : 'Connect Wallet to Bet'}
                 </button>
-            ) : !market.resolved && !isExpired ? (
+            ) : !market.resolved ? (
                 <div className="flex flex-col gap-3">
+                    {isExpired && (
+                        <div
+                            className="rounded-lg px-4 py-3 text-sm"
+                            style={{ background: 'rgba(180,83,9,0.1)', color: 'var(--accent-light)', border: '1px solid rgba(180,83,9,0.3)' }}
+                        >
+                            Deadline passed. You can still bet, or request the AI verdict now.
+                        </div>
+                    )}
                     <p className="cc-label" style={{ color: 'var(--muted)' }}>
-                        Place your bet · Balance: {displayBalance} GUSDC
+                        Place your bet · Balance: {userBalance} GUSDC
                     </p>
-                    {/* Amount input */}
                     <div className="flex items-center gap-2">
                         <label className="cc-label whitespace-nowrap" style={{ color: 'var(--muted)' }}>Amount (GUSDC)</label>
                         <input
                             type="number"
                             min={100}
-                            max={displayBalance}
+                            max={userBalance}
                             step={100}
                             value={betAmount}
                             onChange={e => setBetAmount(Math.max(100, Math.min(userBalance, Number(e.target.value) || 100)))}
@@ -382,28 +356,21 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
                             {betting ? '…' : `▼ NO · ${betAmount} GUSDC`}
                         </button>
                     </div>
-                </div>
-            ) : !market.resolved && isExpired ? (
-                <div className="flex flex-col gap-3">
-                    <div
-                        className="rounded-lg px-4 py-3 text-sm"
-                        style={{ background: 'rgba(180,83,9,0.1)', color: 'var(--accent-light)', border: '1px solid rgba(180,83,9,0.3)' }}
-                    >
-                        Deadline passed. AI is ready to render a verdict.
-                    </div>
-                    <button
-                        onClick={handleResolve}
-                        disabled={resolving}
-                        className="rounded-lg px-5 py-3 font-bold text-sm transition-opacity disabled:opacity-50"
-                        style={{ background: 'var(--accent)', color: '#fff' }}
-                    >
-                        {resolving
-                            ? <span className="inline-flex items-center gap-2">
-                                <span className="cc-dot">●</span><span className="cc-dot" style={{ animationDelay: '0.3s' }}>●</span><span className="cc-dot" style={{ animationDelay: '0.6s' }}>●</span>
-                                &nbsp;AI Fetching Evidence…
-                            </span>
-                            : '🎲 Request AI Verdict'}
-                    </button>
+                    {isExpired && (
+                        <button
+                            onClick={handleResolve}
+                            disabled={resolving}
+                            className="rounded-lg px-5 py-3 font-bold text-sm transition-opacity disabled:opacity-50"
+                            style={{ background: 'var(--accent)', color: '#fff' }}
+                        >
+                            {resolving
+                                ? <span className="inline-flex items-center gap-2">
+                                    <span className="cc-dot">●</span><span className="cc-dot" style={{ animationDelay: '0.3s' }}>●</span><span className="cc-dot" style={{ animationDelay: '0.6s' }}>●</span>
+                                    &nbsp;AI Fetching Evidence…
+                                </span>
+                                : '🎲 Request AI Verdict'}
+                        </button>
+                    )}
                 </div>
             ) : null}
 
@@ -412,7 +379,7 @@ export default function MarketDetail({ market, userBalance, onUpdate }: Props) {
                     {error}
                 </p>
             )}
-            {txHash && !market.resolved && (
+            {txHash && (
                 <div
                     className="flex flex-col gap-3 px-4 py-3 rounded-xl text-sm"
                     style={{ background: 'rgba(180,83,9,0.08)', border: '1px solid rgba(180,83,9,0.25)', color: 'var(--foreground)' }}

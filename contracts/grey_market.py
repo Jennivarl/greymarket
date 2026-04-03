@@ -125,7 +125,7 @@ class GreyMarket(gl.Contract):
         self.markets[mid] = market
 
         # Record individual bet for on-chain ledger
-        bet_key = f"{int(mid)}:{str(bettor)}"
+        bet_key = f"{int(mid)}:{str(bettor).lower()}"
         if position == "YES":
             prev = int(self.yes_bets[bet_key]) if bet_key in self.yes_bets else 0
             self.yes_bets[bet_key] = u256(prev + amount)
@@ -254,7 +254,7 @@ Return ONLY valid JSON with these exact keys:
     @gl.public.view
     def get_user_yes_bet(self, market_id_int: int, addr: str) -> int:
         """Return how much GUSDC this address has bet YES on the given market."""
-        key = f"{market_id_int}:{addr}"
+        key = f"{market_id_int}:{addr.lower()}"
         if key not in self.yes_bets:
             return 0
         return int(self.yes_bets[key])
@@ -262,7 +262,7 @@ Return ONLY valid JSON with these exact keys:
     @gl.public.view
     def get_user_no_bet(self, market_id_int: int, addr: str) -> int:
         """Return how much GUSDC this address has bet NO on the given market."""
-        key = f"{market_id_int}:{addr}"
+        key = f"{market_id_int}:{addr.lower()}"
         if key not in self.no_bets:
             return 0
         return int(self.no_bets[key])

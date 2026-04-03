@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { getAllMarkets, getBalance, getUserBets, type Market } from '@/lib/greymarket'
+import { getAllMarkets, getMarket, getMarketCount, getBalance, type Market } from '@/lib/greymarket'
 import GreyMarketLogo from '@/components/GreyMarketLogo'
 import WalletButton from '@/components/WalletButton'
 import MarketCard from '@/components/MarketCard'
@@ -14,45 +14,47 @@ type View = 'markets' | 'create'
 export default function Home() {
     const [markets, setMarkets] = useState<Market[]>([])
     const [loading, setLoading] = useState(false)
+    const [refreshing, setRefreshing] = useState(false)
     const [selected, setSelected] = useState<Market | null>(null)
     const [view, setView] = useState<View>('markets')
     const [dark, setDark] = useState(false)
     const { address } = useWallet()
     const [balance, setBalance] = useState(1000)
-    const [myBets, setMyBets] = useState<{ marketId: number; question: string; position: 'YES' | 'NO'; amount: number }[]>([])
-
-    const loadMyBets = useCallback(async (marketList: Market[], addr: string) => {
-        const rows: { marketId: number; question: string; position: 'YES' | 'NO'; amount: number }[] = []
-        await Promise.all(
-            marketList.map(async (m) => {
-                const { yes, no } = await getUserBets(m.id, addr)
-                if (yes > 0) rows.push({ marketId: m.id, question: m.question, position: 'YES', amount: yes })
-                if (no > 0) rows.push({ marketId: m.id, question: m.question, position: 'NO', amount: no })
-            })
-        )
-        setMyBets(rows)
-    }, [])
+    const [myBets, setMyBets] = useState<{ marketId: number; question: string; position: 'YES' | 'NO'; amount: number }[]>(() => {
+        if (typeof window === 'undefined') return []
+        try { return JSON.parse(localStorage.getItem('greymarket_bets') || '[]') } catch { return [] }
+    })
 
     const load = useCallback((currentSelected?: Market | null) => {
-        // Returns the promise so callers can await fresh data if needed.
-        // gen_call on Bradbury takes 1-3 min, so the initial page load fires
-        // this in the background (no await) to avoid blocking the UI.
         const p = getAllMarkets().then(ms => {
-            const reversed = [...ms].reverse()
-            setMarkets(prev => {
-                const chainIds = new Set(ms.map(m => m.id))
-                const optimistic = prev.filter(m => !chainIds.has(m.id))
-                return [...reversed, ...optimistic]
-            })
+            setMarkets([...ms].reverse())
             if (currentSelected) {
                 const updated = ms.find(m => m.id === currentSelected.id)
                 if (updated) setSelected(updated)
             }
-            if (address) loadMyBets(ms, address).catch(() => { })
         }).catch(() => { })
         setLoading(false)
         return p
-    }, [address, loadMyBets])
+    }, [])
+
+    // Fast refresh: re-read each known market individually (seconds not minutes)
+    const fastRefresh = useCallback(async (currentSelected?: Market | null) => {
+        setRefreshing(true)
+        try {
+            const count = await getMarketCount()
+            const ids = Array.from({ length: count }, (_, i) => i)
+            const results = await Promise.all(ids.map(i => getMarket(i).catch(() => null)))
+            const ms = results.filter(Boolean) as Market[]
+            if (ms.length > 0) {
+                setMarkets([...ms].reverse())
+                if (currentSelected) {
+                    const updated = ms.find(m => m.id === currentSelected.id)
+                    if (updated) setSelected(updated)
+                }
+            }
+        } catch { /* ignore */ }
+        setRefreshing(false)
+    }, [])
 
     useEffect(() => { load() }, [load])
 
@@ -220,11 +222,20 @@ export default function Home() {
                             )}
 
                             {/* My Bets */}
-                            {address && myBets.length > 0 && (
+                            {myBets.length > 0 && (
                                 <section className="flex flex-col gap-3">
-                                    <h3 className="text-xs font-semibold uppercase tracking-widest" style={{ color: 'var(--muted)' }}>
-                                        My Bets
-                                    </h3>
+                                    <div className="flex items-center justify-between">
+                                        <h3 className="text-xs font-semibold uppercase tracking-widest" style={{ color: 'var(--muted)' }}>
+                                            My Bets
+                                        </h3>
+                                        <button
+                                            onClick={() => { localStorage.removeItem('greymarket_bets'); setMyBets([]) }}
+                                            className="text-xs px-2 py-0.5 rounded opacity-50 hover:opacity-100 transition-opacity"
+                                            style={{ color: 'var(--error)' }}
+                                        >
+                                            Clear
+                                        </button>
+                                    </div>
                                     {[...myBets].reverse().map((bet, i) => {
                                         const mkt = markets.find(m => m.id === bet.marketId)
                                         const isWon = mkt?.resolved && mkt.outcome === bet.position
@@ -248,15 +259,10 @@ export default function Home() {
                                                 <span className="flex-1 text-xs truncate" style={{ color: 'var(--foreground)' }}>
                                                     {bet.question}
                                                 </span>
-                                                <span className="shrink-0 text-xs font-semibold addr" style={{ color: 'var(--muted)' }}>
+                                                <span className="shrink-0 text-xs font-semibold" style={{ color: 'var(--muted)' }}>
                                                     {bet.amount} G
                                                 </span>
-                                                <span
-                                                    className="shrink-0 text-xs font-bold"
-                                                    style={{
-                                                        color: isWon ? 'var(--success)' : isLost ? 'var(--error)' : 'var(--muted)',
-                                                    }}
-                                                >
+                                                <span className="shrink-0 text-xs font-bold" style={{ color: isWon ? 'var(--success)' : isLost ? 'var(--error)' : 'var(--muted)' }}>
                                                     {isWon ? '✔ Won' : isLost ? '✘ Lost' : '● Open'}
                                                 </span>
                                             </button>
@@ -280,11 +286,12 @@ export default function Home() {
                                 </section>
                             )}
                             <button
-                                onClick={() => load(selected)}
-                                className="self-start text-xs px-3 py-1.5 rounded-lg border transition-opacity hover:opacity-70"
+                                onClick={() => fastRefresh(selected)}
+                                disabled={refreshing}
+                                className="self-start text-xs px-3 py-1.5 rounded-lg border transition-opacity hover:opacity-70 disabled:opacity-40"
                                 style={{ borderColor: 'var(--border)', color: 'var(--muted)' }}
                             >
-                                Refresh
+                                {refreshing ? 'Refreshing…' : 'Refresh'}
                             </button>
                         </div>
                     )}
@@ -299,8 +306,18 @@ export default function Home() {
                         <MarketDetail
                             market={selected}
                             userBalance={balance}
+                            onBetAccepted={(marketId, question, position, amount) => {
+                                setMyBets(prev => {
+                                    const idx = prev.findIndex(b => b.marketId === marketId && b.position === position)
+                                    const next = idx >= 0
+                                        ? prev.map((b, i) => i === idx ? { ...b, amount: b.amount + amount } : b)
+                                        : [...prev, { marketId, question, position, amount }]
+                                    localStorage.setItem('greymarket_bets', JSON.stringify(next))
+                                    return next
+                                })
+                            }}
                             onUpdate={async () => {
-                                await load(selected)
+                                await fastRefresh(selected)
                                 if (address) getBalance(address).then(setBalance)
                             }}
                         />
